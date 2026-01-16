@@ -1,0 +1,14 @@
+{
+    "python.REPL.enableREPLSmartSend": false,
+    "cSpell.words": [
+        "fadd",
+        "fcmp",
+        "fdiv",
+        "fmul",
+        "fneg",
+        "fsub",
+        "rtype",
+        "sdiv",
+        "srem"
+    ]
+}
