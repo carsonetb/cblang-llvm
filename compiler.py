@@ -12,10 +12,11 @@ from ast_classes import (
     LiteralType,
     LiteralExpr,
     Program,
+    ScopeExpr,
     Statement,
     UnaryExpr,
-    VariableExpr,
     VarDecl,
+    VariableExpr,
 )
 import llvmlite.ir as ir
 from scanner import Token
@@ -24,6 +25,7 @@ from builtin_types import (
     INT_TYPE,
     FLOAT_TYPE,
     CHAR_TYPE,
+    BOOL_TYPE,
     TRUE_VAL,
     FALSE_VAL,
     CB_INT,
@@ -43,8 +45,10 @@ class Compiler:
     def __init__(self, program: Program) -> None:
         self.program = program
         self.global_members: dict[str, Member] = {}
+        self.local_vars: dict[str, tuple[ir.AllocaInstr, CBType]] = {}
         self.module = ir.Module()
         self._builder: ir.IRBuilder | None = None
+        self._block_counter = 0
 
     @property
     def builder(self) -> ir.IRBuilder:
@@ -275,18 +279,20 @@ class Compiler:
         # For expression statements, we discard the result
         # This handles function calls, arithmetic expressions, etc.
 
-    def gen_if_stmt(self, stmt: IfStmt) -> None:
+    def gen_if_stmt(self, stmt: IfStmt, end_block: ir.Block | None = None) -> None:
         """
         Compiles an if statement with optional elif/else branches.
 
         :param stmt: The if statement to compile.
         :type stmt: IfStmt
+        :param end_block: The end block to jump to after all branches (used for elif chains).
+        :type end_block: ir.Block | None
         """
         # Evaluate the condition
         condition_val = self.gen_expr(stmt.condition)
         if not condition_val:
             # Create a dummy token for error reporting
-            dummy_token = Token("condition", 0)  # type: ignore
+            dummy_token = Token.make_external("condition")
             raise compile_error(dummy_token, "If condition cannot be void")
 
         # Convert condition to boolean (i1)
@@ -295,7 +301,9 @@ class Compiler:
         # Create basic blocks
         if_block = self.builder.append_basic_block("if_true")
         else_block = self.builder.append_basic_block("if_false")
-        end_block = self.builder.append_basic_block("if_end")
+        # Only create end block if this is the top-level if (not an elif)
+        if end_block is None:
+            end_block = self.builder.append_basic_block("if_end")
 
         # Conditional branch
         self.builder.cbranch(bool_condition, if_block, else_block)
@@ -303,23 +311,27 @@ class Compiler:
         # Generate if body
         self.builder.position_at_end(if_block)
         self.gen_scope_expr(stmt.body)
-        self.builder.branch(end_block)
+        # Only branch to end if block is not already terminated
+        if not self.builder.block.is_terminated:  # pyright: ignore[reportOptionalMemberAccess]
+            self.builder.branch(end_block)
 
         # Generate else/elif body
         self.builder.position_at_end(else_block)
         if stmt.else_branch:
             if isinstance(stmt.else_branch, IfStmt):
-                # Elif - recursively handle as nested if
-                self.gen_if_stmt(stmt.else_branch)
+                # Elif - recursively handle as nested if, passing the same end_block
+                self.gen_if_stmt(stmt.else_branch, end_block)
             elif isinstance(stmt.else_branch, ElseStmt):
                 # Else statement
                 self.gen_else_stmt(stmt.else_branch)
-            self.builder.branch(end_block)
+                # Branch to end after else body
+                if not self.builder.block.is_terminated:  # pyright: ignore[reportOptionalMemberAccess]
+                    self.builder.branch(end_block)
         else:
             # No else branch - just branch to end
             self.builder.branch(end_block)
 
-        # Position builder at end block
+        # Position builder at end block (only for top-level if)
         self.builder.position_at_end(end_block)
 
     def gen_else_stmt(self, stmt: ElseStmt) -> None:
@@ -331,14 +343,15 @@ class Compiler:
         """
         self.gen_scope_expr(stmt.body)
 
-    def gen_scope_expr(self, scope_expr) -> None:
+    def gen_scope_expr(self, scope_expr: ScopeExpr) -> None:
         """
         Compiles a scope expression (body of if/else statements).
 
         :param scope_expr: The scope expression to compile.
+        :type scope_expr: ScopeExpr
         """
-        # ScopeExpr contains statements - compile each one
-        for stmt in scope_expr.statements:
+        # ScopeExpr contains statements in `body` - compile each one
+        for stmt in scope_expr.body:
             self.gen_stmt(stmt)
 
     def convert_to_bool(self, value: CBValue) -> ir.Value:
