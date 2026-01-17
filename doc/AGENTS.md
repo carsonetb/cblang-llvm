@@ -6,6 +6,13 @@ Guidelines for AI agents working in this codebase.
 
 This is **cblang** - a custom programming language compiler written in Python that targets LLVM IR via `llvmlite`. The language is statically-typed with class-based OOP, C-like syntax, and features like operator overloading and type casting.
 
+DO NOT RUN FORMATTERS
+
+## Where to look
+
+doc/ast-spec.txt for language spec
+python files in src/
+
 ### Architecture
 
 ```
@@ -21,7 +28,7 @@ Source Code → Scanner → Tokens → Parser → AST → Compiler → LLVM IR
 | `compiler.py` | Code generator - converts AST to LLVM IR |
 | `doc/ast-spec.txt` | BNF-like grammar specification |
 
-## Build & Test Commands
+## Build Commands
 
 ### Environment Setup
 ```bash
@@ -29,21 +36,23 @@ source .venv/bin/activate
 ```
 
 ### Dependencies
-- `llvmlite==0.46.0`, `lark-parser==0.12.0`, `pymlir==0.5`, Python 3.13+
+- `llvmlite==0.46.0`
 
 ### Running Tests
 ```bash
-python -m unittest discover              # Run all tests
-python -m unittest test_scanner          # Run a specific test file
-python -m unittest test_scanner.TestScanner                    # Specific test class
-python -m unittest test_scanner.TestScanner.test_single_char_tokens  # Single test
-python -m unittest -v test_scanner       # Verbose output
+# Run all scanner tests
+python -m unittest tests.test_scanner -v
+
+# Run specific test class
+python -m unittest tests.test_scanner.TestLiterals -v
+
+# Run specific test method
+python -m unittest tests.test_scanner.TestLiterals.test_integer -v
 ```
 
-### Type Checking
-```bash
-pyright .
-```
+Unit tests are located in `tests/` directory. Currently available:
+- `tests/test_scanner.py` - 99 tests for the scanner (lexer/tokenizer)
+- `tests/test_parser.py` - 
 
 ## Code Style Guidelines
 

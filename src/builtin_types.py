@@ -1,5 +1,6 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
+from typing import Container
 
 from llvmlite import ir
 
@@ -12,8 +13,7 @@ class Value:
         self.value = value
 
 class Field:
-    def __init__(self, field_type: Type, value: Value, flags: set[MemberFlag | FunctionFlag] = set()) -> None:
-        self.field_type = field_type
+    def __init__(self, value: Value, flags: Container[MemberFlag | FunctionFlag] = set()) -> None:
         self.value = value
         self.flags = flags
     
@@ -46,6 +46,9 @@ class Type(ABC):
 
     @abstractmethod
     def get_field(self, name: str) -> Field: pass
+
+    @abstractmethod
+    def call(self, name: str, arguments: list[Value]) -> Value: pass
 
 class UserType(Type):
     def __init__(self, module: ir.Module, name: str) -> None:

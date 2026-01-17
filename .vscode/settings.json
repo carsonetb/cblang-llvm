@@ -1,14 +1,25 @@
 {
     "python.REPL.enableREPLSmartSend": false,
     "cSpell.words": [
+        "abstractmethod",
+        "alloca",
+        "cblang",
+        "dataclass",
+        "dataclasses",
+        "docstrings",
+        "elif",
         "fadd",
         "fcmp",
         "fdiv",
         "fmul",
         "fneg",
         "fsub",
+        "isinstance",
+        "llvmlite",
         "rtype",
         "sdiv",
-        "srem"
+        "srem",
+        "stdlib",
+        "venv"
     ]
 }
