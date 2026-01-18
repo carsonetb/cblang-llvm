@@ -1,11 +1,12 @@
+from __future__ import annotations
 from typing import cast
 from llvmlite import ir
 import llvmlite.binding as llvm
-from llvm_types import I32
+from llvm_types import I32, I8
 from scanner import Token
-from ast_classes import Accessible, BinaryExpr, Grouping, MemberFlag, Program, Class, Function, VarDecl, Expression, LiteralExpr, CallExpr, LiteralType, UnaryExpr, VariableExpr
-from builtin_types import BoolType, CharType, Field, FloatType, IntType, StringType, Type, UserType, FunctionType, Value, FunctionValue, VoidType
-from src.parser import ArrayExpr, ScopeExpr
+from ast_classes import Accessible, BinaryExpr, Grouping, MemberFlag, Program, Class, Function, Statement, VarDecl, Expression, LiteralExpr, CallExpr, LiteralType, UnaryExpr, VariableExpr, ArrayExpr, ScopeStmt
+from builtin_types import BoolType, CharType, Field, FloatType, IntType, StringType, Type, UserType, FunctionType, Value, FunctionValue, VoidType, ArrayType
+from src.parser import AssignmentStmt, ElseStmt, ForStmt, IfStmt, ReturnStmt
 
 def compile_error(token: Token, msg: str) -> RuntimeError:
     print(f"@Compiler [line {token.line}] [token {token.raw}] [ERROR] {msg}")
@@ -13,8 +14,11 @@ def compile_error(token: Token, msg: str) -> RuntimeError:
 
 class Compiler:
     def __init__(self, program: Program, module_name: str, filename: str, package: str) -> None:
+        llvm.initialize_native_target()
+        llvm.initialize_native_asmprinter()
         self.program = program
         self.target_machine = llvm.Target.from_default_triple().create_target_machine()
+        self.target_data = self.target_machine.target_data
         self.module_name = module_name
         self.module = ir.Module(self.module_name)
         self.di_file = self.module.add_debug_info("DIFile", {
@@ -32,6 +36,9 @@ class Compiler:
         self.scoped_variables: list[dict[str, Field]] = [{}] # Start with the global scope.
         self.type_db: dict[str, Type] = {}
         self.inside: UserType | None = None
+        self.lambda_ticker = 0
+        arr = ArrayType(self.module, self.target_machine.target_data, IntType(self.module))
+        print(self.module)
     
     @property
     def scope(self) -> dict[str, Field]:
@@ -59,6 +66,12 @@ class Compiler:
                 return scope[name.raw]
         
         raise compile_error(name, f"Variable '{name}' doesn't exist within the current scope.")
+
+    def gen_string_literal(self, string: str) -> Value:
+        b_string = bytearray(string.encode("utf8") + b"\0")
+        string_t = StringType(self.module, len(b_string))
+        constant = ir.Constant(string_t.llvm_type, len(b_string))
+        return Value(string_t, constant)
     
     def gen_literal(self, lit: LiteralExpr) -> Value:
         match lit.ltype:
@@ -71,7 +84,7 @@ class Compiler:
             case LiteralType.CHAR:
                 ret_type = CharType(self.module)
             case LiteralType.STRING:
-                ret_type = StringType(self.module)
+                return self.gen_string_literal(cast(str, lit.val))
         return Value(ret_type, ir.Constant(ret_type.llvm_type, lit.val))
     
     def gen_function_call(self, expr: CallExpr, on: Value | None = None) -> Value:
@@ -122,10 +135,28 @@ class Compiler:
             raise compile_error(expr.op, f"Operator {expr.op} '{rhs.val_type.name}' does not exist.")
 
     def gen_array(self, expr: ArrayExpr) -> Value:
-        pass
+        if len(expr.elements) == 0:
+            raise compile_error(expr.array_end, "Cannot infer type of an empty array.")
+        
+        values = [self.gen_expression(expr.elements[0])]
+        target_type = values[0].val_type
+        if len(expr.elements) >= 2:
+            for element in expr.elements[1:]:
+                val = self.gen_expression(element)
+                if val.val_type.name != target_type.name:
+                    raise compile_error(expr.array_end, "Array has values of inconsistent types.")
+        
+        this_type_string = f"array<{target_type.name}>"
+        if this_type_string in self.type_db:
+            this_type = cast(ArrayType, self.type_db[this_type_string])
+        else:
+            this_type = ArrayType(self.module, self.target_data, target_type)
+        
+        out = this_type.generate(self.builder)
+        for value in values:
+            this_type.call(self.builder, out, "append", [value])
 
-    def gen_scope(self, expr: ScopeExpr) -> Value:
-        pass
+        return out
 
     def gen_expression(self, expr: Expression) -> Value:
         if isinstance(expr, LiteralExpr):
@@ -138,10 +169,46 @@ class Compiler:
             return self.gen_unary(expr)
         if isinstance(expr, ArrayExpr):
             return self.gen_array(expr)
-        if isinstance(expr, ScopeExpr):
-            return self.gen_scope(expr)
         if isinstance(expr, Grouping):
             return self.gen_expression(expr.expr)
+        assert(False)
+                
+    def gen_scope(self, expr: ScopeStmt) -> Value | None:
+        for stmt in expr.body:
+            possible_ret = self.gen_statement(stmt)
+            if not possible_ret is None:
+                return possible_ret
+    
+    def gen_var_declaration(self, stmt: VarDecl) -> None:
+        var_type = self.get_type(stmt.type_name[0])
+        name = stmt.type_name[1]
+        if stmt.value:
+            value = self.gen_expression(stmt.value)
+        else:
+            if isinstance(var_type, (BoolType, IntType, FloatType, CharType)):
+                ir_val = ir.Constant(var_type.llvm_type, 0)
+            if isinstance(var_type, StringType):
+                ir_val = self.gen_string_literal("")
+
+    def gen_assignment(self, stmt: AssignmentStmt) -> None:
+        pass
+
+    def gen_if(self, stmt: IfStmt) -> Value | None:
+        pass
+
+    def gen_else(self, stmt: ElseStmt) -> Value | None:
+        pass
+
+    def gen_for(self, stmt: ForStmt) -> Value | None:
+        pass
+
+    def gen_return(self, stmt: ReturnStmt) -> Value:
+        pass
+
+    def gen_statement(self, stmt: Statement) -> Value | None:
+        """Statements only return a value for a (possibly cascaded) return statement."""
+
+        pass
     
     def gen_arg_types(self, args: list[tuple[Token, Token]]) -> list[tuple[str, Type]]:
         out: list[tuple[str, Type]] = []

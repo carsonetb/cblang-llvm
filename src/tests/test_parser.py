@@ -29,7 +29,7 @@ from ast_classes import (
     MemberFlag,
     Program,
     ReturnStmt,
-    ScopeExpr,
+    ScopeStmt,
     Statement,
     UnaryExpr,
     VarDecl,
@@ -732,7 +732,7 @@ class TestIfStatements(unittest.TestCase):
         stmt = parse_statement("if (true) {}")
         self.assertIsInstance(stmt, IfStmt)
         self.assertIsInstance(stmt.condition, LiteralExpr)
-        self.assertIsInstance(stmt.body, ScopeExpr)
+        self.assertIsInstance(stmt.body, ScopeStmt)
         self.assertIsNone(stmt.else_branch)
 
     def test_if_with_variable_condition(self):
@@ -1113,7 +1113,7 @@ class TestEmptyStatements(unittest.TestCase):
 
     def test_empty_statement(self):
         stmt = parse_statement(";")
-        self.assertIsInstance(stmt, ScopeExpr)
+        self.assertIsInstance(stmt, ScopeStmt)
         self.assertEqual(len(stmt.body), 0)
 
     def test_multiple_empty_statements(self):

@@ -1,7 +1,7 @@
 from ast_classes import (
     ArrayExpr, AssignmentStmt, BinaryExpr, CallExpr, Class, ElseStmt,
     Expression, ForStmt, Function, FunctionFlag, Grouping, IfStmt, Import,
-    LiteralExpr, LiteralType, MemberFlag, Program, ReturnStmt, ScopeExpr,
+    LiteralExpr, LiteralType, MemberFlag, Program, ReturnStmt, ScopeStmt,
     Statement, UnaryExpr, VarDecl, VariableExpr, WhileStmt
 )
 from scanner import Token, TokenType
@@ -74,7 +74,7 @@ class Parser:
         # For empty statements just return an empty Scope.
         # Kind of a hack.
         if self.match(TokenType.SEMICOLON):
-            return ScopeExpr([])
+            return ScopeStmt([])
         
         if self.match(TokenType.RETURN_KW):
             value: Expression | None = None
@@ -134,9 +134,9 @@ class Parser:
             self.consume(TokenType.LEFT_CURLY, "Expected '{' after 'else'")
             else_body = self.scope_body()
             self.consume(TokenType.RIGHT_CURLY, "Expected '}' after else body")
-            else_branch = ElseStmt(ScopeExpr(else_body))
+            else_branch = ElseStmt(ScopeStmt(else_body))
         
-        return IfStmt(condition, ScopeExpr(body), else_branch)
+        return IfStmt(condition, ScopeStmt(body), else_branch)
     
     def while_stmt(self) -> WhileStmt:
         self.consume(TokenType.WHILE_KW, "Expected 'while'")
@@ -422,7 +422,7 @@ class Parser:
         if self.match(TokenType.LEFT_CURLY):
             body = self.scope_body()
             self.consume(TokenType.RIGHT_CURLY, "Expected '}' after scope")
-            return ScopeExpr(body)
+            return ScopeStmt(body)
         
         if self.check(TokenType.IDENTIFIER):
             return self.function_or_variable()

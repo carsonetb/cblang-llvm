@@ -1,5 +1,6 @@
 from llvmlite import ir
 
 I32 = ir.IntType(32)
-I8_POINTER = ir.IntType(8).as_pointer()
+I8 = ir.IntType(8)
+I8_POINTER = I8.as_pointer()
 VOID = ir.VoidType()

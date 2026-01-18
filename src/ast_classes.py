@@ -78,11 +78,17 @@ class Grouping(Expression):
 
 @dataclass
 class ArrayExpr(Expression):
+    array_end: Token
     elements: list[Expression]
 
 
+@dataclass 
+class LambdaExpr(Expression):
+    body: list[Statement]
+
+
 @dataclass
-class ScopeExpr(Expression):
+class ScopeStmt(Statement):
     body: list[Statement]
 
 
@@ -112,13 +118,13 @@ class ReturnStmt(Statement):
 @dataclass
 class IfStmt(Statement):
     condition: Expression
-    body: ScopeExpr
+    body: ScopeStmt
     else_branch: IfStmt | ElseStmt | None
 
 
 @dataclass
 class ElseStmt(Statement):
-    body: ScopeExpr
+    body: ScopeStmt
 
 
 @dataclass
