@@ -163,4 +163,4 @@ class Class(Statement):
 @dataclass
 class Program:
     imports: list[Import]
-    statements: list[Statement]
+    statements: list[Class | Function | VarDecl]

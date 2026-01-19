@@ -1,0 +1,7 @@
+scope main = {
+    int x = num();
+}
+
+scope num -> int = {
+    return 0;
+}

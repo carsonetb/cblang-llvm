@@ -1,12 +1,13 @@
 from __future__ import annotations
+from os import makedirs
+import os
 from typing import cast
 from llvmlite import ir
 import llvmlite.binding as llvm
-from llvm_types import I1, I32, I8
+from llvm_types import I1, I32, I8, VOID
 from scanner import Token
-from ast_classes import Accessible, BinaryExpr, Grouping, MemberFlag, Program, Class, Function, Statement, VarDecl, Expression, LiteralExpr, CallExpr, LiteralType, UnaryExpr, VariableExpr, ArrayExpr, ScopeStmt, WhileStmt
+from ast_classes import Accessible, BinaryExpr, Grouping, MemberFlag, Program, Class, Function, Statement, VarDecl, Expression, LiteralExpr, CallExpr, LiteralType, UnaryExpr, VariableExpr, ArrayExpr, ScopeStmt, WhileStmt, AssignmentStmt, ElseStmt, ForStmt, IfStmt, ReturnStmt
 from builtin_types import BoolType, CRuntime, CharType, Field, FloatType, IntType, RCRuntime, RCValue, StringType, Type, UserType, FunctionType, Value, FunctionValue, ValueField, VoidType, ArrayType, VoidValue
-from src.parser import AssignmentStmt, ElseStmt, ForStmt, IfStmt, ReturnStmt
 
 def compile_error(token: Token, msg: str) -> RuntimeError:
     print(f"@Compiler [line {token.line}] [token {token.raw}] [ERROR] {msg}")
@@ -17,29 +18,25 @@ class Compiler:
         llvm.initialize_native_target()
         llvm.initialize_native_asmprinter()
         self.program = program
-        self.target_machine = llvm.Target.from_default_triple().create_target_machine()
+        self.target_machine = llvm.Target.from_default_triple().create_target_machine(reloc='pic')
         self.target_data = self.target_machine.target_data
         self.module_name = module_name
         self.module = ir.Module(self.module_name)
         self.c_runtime = CRuntime(self.module)
         self.rc_runtime = RCRuntime(self.module, self.c_runtime)
-        self.di_file = self.module.add_debug_info("DIFile", {
-            "filename": filename,
-            "package": package,
-        })
-        self.di_compile_unit = self.module.add_debug_info("DICompileUnit", {
-            "language": ir.DIToken("DW_LANG_Python"),
-            "file": self.di_file,
-            "producer": "llvmlite 0.46.0",
-            "runtimeVersion": 2,
-            "isOptimized": False,
-        }, is_distinct=True)
-        self.builder_stack = [ir.IRBuilder()]
         self.scoped_variables: list[dict[str, ValueField]] = [{}] # Start with the global scope.
-        self.type_db: dict[str, Type] = {}
+        self.type_db: dict[str, Type] = {
+            'bool': BoolType(self.module),
+            'int': IntType(self.module),
+            'float': FloatType(self.module),
+            'string': StringType(self.module, 1),
+        }
         self.path_array = [package, module_name]
-        arr = ArrayType(self.builder, self.module, self.target_machine.target_data, IntType(self.module), self.c_runtime, self.rc_runtime)
-        print(self.module)
+
+        self.main_func_ty = ir.FunctionType(I32, [])
+        self.main_func = ir.Function(self.module, self.main_func_ty, f"main")
+        block = self.main_func.append_basic_block("entry")
+        self.builder_stack = [ir.IRBuilder(block)]
     
     @property
     def scope(self) -> dict[str, ValueField]:
@@ -106,7 +103,7 @@ class Compiler:
                 return self.gen_string_literal(cast(str, lit.val))
         return Value(self.builder, ret_type, ir.Constant(ret_type.llvm_type, lit.val))
     
-    def gen_function_call(self, expr: CallExpr, on: Value | None = None) -> Value:
+    def gen_function_call(self, expr: CallExpr, on: Value | None = None) -> Value | VoidValue:
         # TODO: Validate arguments.
         args = []
         for arg_expr in expr.args:
@@ -134,9 +131,12 @@ class Compiler:
         except KeyError:
             raise compile_error(expr.name, f"Type '{on.val_type.name}' has no member '{expr.name}'")
 
-    def gen_accessible(self, expr: Accessible) -> Value:
+    def gen_accessible(self, expr: Accessible, can_be_void=False) -> Value | VoidValue:
         if isinstance(expr, CallExpr):
-            return self.gen_function_call(expr)
+            possibly_void = self.gen_function_call(expr)
+            if isinstance(possibly_void, VoidValue):
+                raise compile_error(expr.callee, "Function cannot return void.")
+            return possibly_void
         if isinstance(expr, VariableExpr):
             return self.gen_variable_expr(expr)
         assert(False)
@@ -144,17 +144,24 @@ class Compiler:
     def gen_binary(self, expr: BinaryExpr) -> Value:
         lhs = self.gen_expression(expr.lhs)
         rhs = self.gen_expression(expr.rhs)
+        assert not isinstance(lhs, VoidValue)
+        assert not isinstance(rhs, VoidValue)
 
         try:
-            return lhs.call(self.builder, expr.op.raw, [rhs], self.rc_runtime, self.target_data)
+            possibly_void = lhs.call(self.builder, expr.op.raw, [rhs], self.rc_runtime, self.target_data)
+            assert not isinstance(possibly_void, VoidValue)
+            return possibly_void
         except:
             raise compile_error(expr.op, f"Operator '{lhs.val_type.name}' {expr.op} '{rhs.val_type.name}' does not exist.")
 
     def gen_unary(self, expr: UnaryExpr) -> Value:
         rhs = self.gen_expression(expr.rhs)
+        assert not isinstance(rhs, VoidValue)
 
         try:
-            return rhs.call(self.builder, expr.op.raw, [], self.rc_runtime, self.target_data)
+            possibly_void = rhs.call(self.builder, expr.op.raw, [], self.rc_runtime, self.target_data)
+            assert not isinstance(possibly_void, VoidValue)
+            return possibly_void
         except:
             raise compile_error(expr.op, f"Operator {expr.op} '{rhs.val_type.name}' does not exist.")
 
@@ -162,11 +169,12 @@ class Compiler:
         if len(expr.elements) == 0:
             raise compile_error(expr.array_end, "Cannot infer type of an empty array.")
         
-        values = [self.gen_expression(expr.elements[0])]
+        values: list[Value] = [self.gen_expression(expr.elements[0])] # type: ignore
         target_type = values[0].val_type
         if len(expr.elements) >= 2:
             for element in expr.elements[1:]:
                 val = self.gen_expression(element)
+                assert not isinstance(val, VoidValue)
                 if val.val_type.name != target_type.name:
                     raise compile_error(expr.array_end, "Array has values of inconsistent types.")
         
@@ -182,11 +190,13 @@ class Compiler:
 
         return out
 
-    def gen_expression(self, expr: Expression) -> Value:
+    def gen_expression(self, expr: Expression, can_be_void=False) -> Value | VoidValue:
         if isinstance(expr, LiteralExpr):
             return self.gen_literal(expr)
         if isinstance(expr, Accessible):
-            return self.gen_accessible(expr)
+            possibly_void = self.gen_accessible(expr, can_be_void)
+            assert not (isinstance(possibly_void, VoidValue) and not can_be_void)
+            return possibly_void
         if isinstance(expr, BinaryExpr):
             return self.gen_binary(expr)
         if isinstance(expr, UnaryExpr):
@@ -208,6 +218,7 @@ class Compiler:
         name = stmt.type_name[1]
         if stmt.value:
             value = self.gen_expression(stmt.value)
+            assert not isinstance(value, VoidValue)
         else:
             if isinstance(var_type, (BoolType, IntType, FloatType, CharType)):
                 value = Value(self.builder, var_type, ir.Constant(var_type.llvm_type, 0))
@@ -224,6 +235,9 @@ class Compiler:
     def gen_assignment(self, stmt: AssignmentStmt) -> None:
         target = self.gen_accessible(stmt.target)
         source = self.gen_expression(stmt.value)
+        assert not isinstance(target, VoidValue)
+        assert not isinstance(source, VoidValue)
+
         if source.val_type.name != target.val_type.name:
             raise compile_error(stmt.equal_token, f"Cannot assign value of type '{source.val_type.name}' to variable of type '{target.val_type.name}'")
 
@@ -233,8 +247,10 @@ class Compiler:
 
         target.store_value(self.builder, source.load_value(self.builder)) # TODO: This will be changed when reference semantics.
 
-    def gen_if(self, stmt: IfStmt) -> Value | None:
+    def gen_if(self, stmt: IfStmt) -> Value | VoidValue | None:
         branching_val = self.gen_expression(stmt.condition)
+        assert not isinstance(branching_val, VoidValue)
+
         if branching_val.val_type.name != "bool":
             raise compile_error(stmt.keyword_tok, "The condition in an if statement must evaluate to type 'bool'.")
         branching_res = self.builder.icmp_unsigned("==", branching_val.load_value(self.builder), I1(1))
@@ -245,24 +261,27 @@ class Compiler:
         self.builder.cbranch(branching_res, truthy_block, falsey_block)
 
         self.builder.position_at_start(truthy_block)
-        self.gen_scope(stmt.body)
+        returns = self.gen_scope(stmt.body)
         self.builder.branch(continued_block)
 
-        # TODO: Returns
+        # TODO: Check return type is correct.
 
         self.builder.position_at_start(falsey_block)
         if stmt.else_branch:
             if isinstance(stmt.else_branch, IfStmt):
-                self.gen_if(stmt.else_branch)
+                returns = self.gen_if(stmt.else_branch) if returns else None
             if isinstance(stmt.else_branch, ElseStmt):
-                self.gen_else(stmt.else_branch)
+                returns = self.gen_else(stmt.else_branch) if returns else None
         
-        # Either branch from falsey_block to continued_block, or, if 
-        # we generated an if statement, branch from ITS continued block
-        # to the higher level continued block.
-        self.builder.branch(continued_block)
-        
-        self.builder.position_at_start(continued_block)
+        if returns is None:
+            # Either branch from falsey_block to continued_block, or, if 
+            # we generated an if statement, branch from ITS continued block
+            # to the higher level continued block.
+            self.builder.branch(continued_block)
+            
+            self.builder.position_at_start(continued_block)
+
+        return returns
 
     def gen_else(self, stmt: ElseStmt) -> Value | VoidValue | None:
         return self.gen_scope(stmt.body)
@@ -333,6 +352,7 @@ class Compiler:
         var_name = generate.type_name[1]
         var_type = self.get_type(generate.type_name[0])
         expr_value = self.gen_expression(generate.value)
+        assert not isinstance(expr_value, VoidValue)
         value = expr_value.value_ptr
         # TODO: Check casting
         if not expr_value.val_type == var_type.name:
@@ -432,3 +452,51 @@ class Compiler:
         self.path_array.pop()
 
         return out
+    
+    def gen_program(self, generate: Program, out_directory: str):
+        for import_stmt in generate.imports:
+            pass
+
+        for stmt in generate.statements:
+            if isinstance(stmt, Class):
+                self.gen_class(stmt)
+            elif isinstance(stmt, Function):
+                self.gen_function_definition(stmt)
+            elif isinstance(stmt, VarDecl):
+                self.gen_var_declaration(stmt)
+            
+        try:
+            main_func = self.get_field(Token.make_external("main"))
+        except RuntimeError:
+            print("ERROR: Cannot compile program without a 'main' function.")
+            raise RuntimeError()
+        
+        if not isinstance(main_func.value, FunctionValue):
+            print("ERROR: Main entrypoint must be a function.")
+            raise RuntimeError()
+        
+        main_func.value.call_this(self.builder, [], self.rc_runtime, self.target_data)
+        
+        self.builder.ret(I32(0))
+
+        makedirs(out_directory, exist_ok=True)
+
+        with open(f"{out_directory}/llvm_ir.txt", "w") as ir_file:
+            ir_file.write(self.module.__str__())
+
+        print("Finished compiling LLVM IR!")
+
+        mod = llvm.parse_assembly(self.module.__str__())
+        mod.verify()
+
+        obj_bytes = self.target_machine.emit_object(mod)
+        with open(f"{out_directory}/out.o", "wb") as object_file:
+            object_file.write(obj_bytes)
+        
+        print("Object file created. Running GCC ...")
+        
+        os.system(f"gcc -o {out_directory}/program {out_directory}/out.o")
+
+        print("Done!")
+
+        # TODO: Actually compile the module.

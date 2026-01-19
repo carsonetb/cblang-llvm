@@ -122,7 +122,7 @@ class Value:
     def store_value(self, builder: ir.IRBuilder, value: ir.Value) -> None:
         builder.store(value, self.value_ptr)
     
-    def call(self, builder: ir.IRBuilder, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
+    def call(self, builder: ir.IRBuilder, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
         return self.val_type.call(builder, self, name, args, rc_runtime, target_data)
     
     def get(self, builder: ir.IRBuilder, name: str) -> Value:
@@ -173,9 +173,12 @@ class FunctionValue(Value):
         super().__init__(builder, val_type, value)
         self.function_type = val_type
     
-    def call_this(self, builder: ir.IRBuilder, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
+    def call_this(self, builder: ir.IRBuilder, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
         # TODO: Copy all primitive types.
         result = builder.call(self.load_value(builder), [arg.load_value(builder) for arg in args], self.function_type.name)
+
+        if isinstance(self.function_type.returns, VoidType):
+            return VoidValue()
 
         if self.function_type.returns.needs_refcount:
             return RCValue(builder, self.function_type.returns, result, rc_runtime, target_data, allocate=False)
@@ -244,7 +247,7 @@ class Type(ABC):
     def get_destructor(self) -> ir.Function | None:
         return None
     
-    def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
+    def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
         field = self.get_field(name)
         if not isinstance(field.val_type, FunctionType):
             raise ValueError()
@@ -335,13 +338,13 @@ class FunctionType(Type):
     def __init__(self, module: ir.Module, name: str, args: list[Type], returns: Type, function: ir.Function) -> None:
         super().__init__(module)
         self._name = name
-        self._llvm_type = ir.FunctionType(returns.llvm_type, (arg.llvm_type for arg in args))
+        self._llvm_type = ir.FunctionType(returns.llvm_type, (arg.llvm_type for arg in args)).as_pointer()
         self.returns = returns
         self.args = args
         self.function = function
     
     @property
-    def llvm_type(self) -> ir.FunctionType:
+    def llvm_type(self) -> ir.Type:
         return self._llvm_type
 
     @property

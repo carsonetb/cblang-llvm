@@ -1,6 +1,6 @@
 from ast_classes import (
     ArrayExpr, AssignmentStmt, BinaryExpr, CallExpr, Class, ElseStmt,
-    Expression, ForStmt, Function, FunctionFlag, Grouping, IfStmt, Import,
+    Expression, ForStmt, Function, FunctionFlag, Grouping, IfStmt, Import, LambdaExpr,
     LiteralExpr, LiteralType, MemberFlag, Program, ReturnStmt, ScopeStmt,
     Statement, UnaryExpr, VarDecl, VariableExpr, WhileStmt
 )
@@ -20,14 +20,17 @@ class Parser:
     
     def parse(self) -> Program: 
         imports: list[Import] = []
-        statements: list[Statement] = []
+        statements: list[Class | Function | VarDecl] = []
 
         while self.match(TokenType.IMPORT_KW):
             imports.append(self.import_statement())
             self.consume_semicolon()
         
         while not self.check(TokenType.EOF):
-            statements.append(self.statement())
+            new_stmt = self.statement()
+            if not isinstance(new_stmt, (Class, Function, VarDecl)):
+                raise self.error(self.previous(), "Expression on this line is not a Class, Function, or Variable Declaration.")
+            statements.append(new_stmt)
 
         return Program(imports, statements)
     
@@ -68,6 +71,11 @@ class Parser:
         if self.check(TokenType.CLASS_KW):
             return self.class_decl()
         
+        if self.match(TokenType.LEFT_CURLY):
+            body = self.scope_body()
+            self.consume(TokenType.RIGHT_CURLY, "Expected '}' after scope")
+            return ScopeStmt(body)
+        
         return self.semicolon_statement()
     
     def semicolon_statement(self) -> Statement:
@@ -92,12 +100,13 @@ class Parser:
         # is an Accessible that will be set.
         expr = self.expression()
         
-        if self.match(TokenType.EQUAL):
+        if self.check(TokenType.EQUAL):
+            eq = self.consume(TokenType.EQUAL, "")
             if not isinstance(expr, (VariableExpr, CallExpr)):
                 raise self.error(self.previous(), "Invalid assignment target")
             value = self.expression()
             self.consume_semicolon()
-            return AssignmentStmt(expr, value)
+            return AssignmentStmt(expr, value, eq)
         
         self.consume_semicolon()
         return expr
@@ -107,16 +116,15 @@ class Parser:
         type_token = self.consume(TokenType.IDENTIFIER, "Expected type name")
         name_token = self.consume(TokenType.IDENTIFIER, "Expected variable name")
         
-        value: Expression | None = None
-        if self.match(TokenType.EQUAL):
-            value = self.expression()
+        self.consume(TokenType.EQUAL, "Expected '=' after variable declaration.")
+        value = self.expression()
         
         self.consume_semicolon()
         return VarDecl((type_token, name_token), value, flags)
     
     def if_stmt(self, use_elif_kw: bool = False) -> IfStmt:
         statement_name = "elif" if use_elif_kw else "if"
-        self.consume(TokenType.ELIF_KW if use_elif_kw else TokenType.IF_KW, f"Expected '{statement_name}'")
+        keyword = self.consume(TokenType.ELIF_KW if use_elif_kw else TokenType.IF_KW, f"Expected '{statement_name}'")
         self.consume(TokenType.LEFT_PAREN, f"Expected '(' after {statement_name}")
         condition = self.expression()
         self.consume(TokenType.RIGHT_PAREN, f"Expected ')' after {statement_name} condition")
@@ -136,7 +144,7 @@ class Parser:
             self.consume(TokenType.RIGHT_CURLY, "Expected '}' after else body")
             else_branch = ElseStmt(ScopeStmt(else_body))
         
-        return IfStmt(condition, ScopeStmt(body), else_branch)
+        return IfStmt(condition, ScopeStmt(body), else_branch, keyword)
     
     def while_stmt(self) -> WhileStmt:
         self.consume(TokenType.WHILE_KW, "Expected 'while'")
@@ -151,7 +159,7 @@ class Parser:
         return WhileStmt(condition, body)
     
     def for_stmt(self) -> ForStmt:
-        self.consume(TokenType.FOR_KW, "Expected 'for'")
+        keyword = self.consume(TokenType.FOR_KW, "Expected 'for'")
         self.consume(TokenType.LEFT_PAREN, "Expected '(' after 'for'")
         
         var_type = self.consume(TokenType.IDENTIFIER, "Expected type in for loop")
@@ -165,7 +173,7 @@ class Parser:
         body = self.scope_body()
         self.consume(TokenType.RIGHT_CURLY, "Expected '}' after for body")
         
-        return ForStmt((var_type, var_name), iterable, body)
+        return ForStmt((var_type, var_name), iterable, body, keyword)
     
     def scope_body(self) -> list[Statement]:
         statements: list[Statement] = []
@@ -250,9 +258,8 @@ class Parser:
         type_token = self.consume(TokenType.IDENTIFIER, "Expected type name")
         name_token = self.consume(TokenType.IDENTIFIER, "Expected variable name")
         
-        value: Expression | None = None
-        if self.match(TokenType.EQUAL):
-            value = self.expression()
+        self.consume(TokenType.EQUAL, "Expected '=' after member variable declaration.")
+        value = self.expression()
         
         return VarDecl((type_token, name_token), value, flags)
     
@@ -412,17 +419,17 @@ class Parser:
             self.consume(TokenType.RIGHT_PAREN, "Expected ')' after expression")
             return Grouping(expr)
         
-        if self.match(TokenType.LEFT_CURLY):
+        if self.match(TokenType.LEFT_BRACKET):
             elements: list[Expression] = []
-            if not self.check(TokenType.RIGHT_CURLY):
+            if not self.check(TokenType.RIGHT_BRACKET):
                 elements = self.expressions()
-            self.consume(TokenType.RIGHT_CURLY, "Expected ']' after array elements")
-            return ArrayExpr(elements)
+            end = self.consume(TokenType.RIGHT_BRACKET, "Expected ']' after array elements")
+            return ArrayExpr(end, elements)
         
         if self.match(TokenType.LEFT_CURLY):
             body = self.scope_body()
             self.consume(TokenType.RIGHT_CURLY, "Expected '}' after scope")
-            return ScopeStmt(body)
+            return LambdaExpr(body)
         
         if self.check(TokenType.IDENTIFIER):
             return self.function_or_variable()
