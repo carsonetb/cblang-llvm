@@ -100,7 +100,7 @@ class Import(Statement):
 @dataclass
 class VarDecl(Statement):
     type_name: tuple[Token, Token]
-    value: Expression | None
+    value: Expression
     flags: set[MemberFlag]
 
 
@@ -108,6 +108,7 @@ class VarDecl(Statement):
 class AssignmentStmt(Statement):
     target: Accessible
     value: Expression
+    equal_token: Token
 
 
 @dataclass
@@ -120,6 +121,7 @@ class IfStmt(Statement):
     condition: Expression
     body: ScopeStmt
     else_branch: IfStmt | ElseStmt | None
+    keyword_tok: Token
 
 
 @dataclass
@@ -138,6 +140,7 @@ class ForStmt(Statement):
     var_type_name: tuple[Token, Token]
     iterable: Expression
     body: list[Statement]
+    for_kw: Token
 
 
 @dataclass
