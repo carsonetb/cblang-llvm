@@ -1,7 +1,12 @@
-scope main = {
-    int x = num();
-}
+class TestClass = (
+
+)
 
 scope num -> int = {
+    TestClass cls = TestClass();
     return 0;
+}
+
+scope main = {
+    int x = num();
 }

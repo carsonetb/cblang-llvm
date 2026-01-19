@@ -4,6 +4,7 @@
         "abstractmethod",
         "alloca",
         "bitcast",
+        "bitcasted",
         "cblang",
         "cbranch",
         "dataclass",

@@ -64,15 +64,15 @@ class Compiler:
     
     def get_field(self, name: Token) -> ValueField:
         for scope in reversed(self.scoped_variables):
-            if name.raw in scope:
+            if name.raw in scope.keys():
                 return scope[name.raw]
         
-        raise compile_error(name, f"Variable '{name}' doesn't exist within the current scope.")
+        raise compile_error(name, f"Variable/function/class '{name}' doesn't exist within the current scope.")
 
     def get_sizeof(self, llvm_type: ir.Type) -> ir.Value:
         null_ptr = ir.Constant(llvm_type.as_pointer(), None)
-        size_ptr = self.builder.gep(null_ptr, I32(1))
-        size = self.builder.ptrtoint(size_ptr, I32)
+        size_ptr = self.builder.gep(null_ptr, [I32(1)], name="size_ptr")
+        size = self.builder.ptrtoint(size_ptr, I32, "size")
         return size # type: ignore
 
     def gen_string_literal(self, string: str) -> Value:
@@ -253,10 +253,10 @@ class Compiler:
 
         if branching_val.val_type.name != "bool":
             raise compile_error(stmt.keyword_tok, "The condition in an if statement must evaluate to type 'bool'.")
-        branching_res = self.builder.icmp_unsigned("==", branching_val.load_value(self.builder), I1(1))
+        branching_res = self.builder.icmp_unsigned("==", branching_val.load_value(self.builder), I1(1), "branching_res")
 
-        truthy_block = self.builder.append_basic_block()
-        falsey_block = self.builder.append_basic_block()
+        truthy_block = self.builder.append_basic_block("truthy")
+        falsey_block = self.builder.append_basic_block("falsey")
         continued_block = self.builder.append_basic_block()
         self.builder.cbranch(branching_res, truthy_block, falsey_block)
 
@@ -388,7 +388,9 @@ class Compiler:
                 elif isinstance(possible_ret, Value) and not generate.returns is None and possible_ret.val_type.name != return_type.name:
                     raise compile_error(generate.name, f"Function does not always return type '{generate.returns.raw}'")
                 break
-        self.builder.ret_void()
+        
+        if not block.is_terminated:
+            self.builder.ret_void()
         self.builder_stack.pop()
         self.pop_scope()
 
@@ -407,18 +409,17 @@ class Compiler:
 
         arg_types = self.gen_arg_types(generate.args)
         type_list = [arg_type for _, arg_type in arg_types]
-        initializer_ir_type = ir.FunctionType(out.llvm_type, [arg_type.llvm_type for arg_type in type_list])
+        initializer_ir_type = ir.FunctionType(out.llvm_type.as_pointer(), [arg_type.llvm_type for arg_type in type_list])
         initializer_value = ir.Function(self.module, initializer_ir_type, f"{self.path}__init")
         initializer_type = FunctionType(self.module, generate.name.raw, type_list, out, initializer_value)
         initializer_field = ValueField(initializer_type, FunctionValue(self.builder, initializer_type, initializer_value), {MemberFlag.STATIC})
-        self.add_field(generate.name, initializer_field)
 
         block = initializer_value.append_basic_block("entry")
         self.builder_stack.append(ir.IRBuilder(block))
         
         size = self.get_sizeof(out.llvm_type)
-        raw_ptr = self.builder.call(self.rc_runtime.rc_alloc_func, [size])
-        this_ptr = self.builder.bitcast(raw_ptr, out.llvm_type.as_pointer())
+        raw_ptr = self.builder.call(self.rc_runtime.rc_alloc_func, [size], "raw_ptr")
+        this_ptr = self.builder.bitcast(raw_ptr, out.llvm_type.as_pointer(), "this_ptr")
 
         for index, arg in enumerate(initializer_value.args):
             zero = ir.Constant(I32, 0)
@@ -450,6 +451,9 @@ class Compiler:
         self.builder.ret(this_ptr)
         self.builder_stack.pop()
         self.path_array.pop()
+
+        self.type_db[out.name] = out
+        self.add_field(generate.name, initializer_field)
 
         return out
     

@@ -40,11 +40,11 @@ class RCRuntime:
         builder = ir.IRBuilder(block)
 
         size = self.rc_alloc_func.args[0]
-        total_size = builder.add(size, I32(self.HEADER_SIZE))
-        mem = builder.call(runtime.malloc, [total_size])
+        total_size = builder.add(size, I32(self.HEADER_SIZE), "total_size")
+        mem = builder.call(runtime.malloc, [total_size], "mem")
         count_ptr = builder.bitcast(mem, I32.as_pointer(), "count_ptr")
         builder.store(I32(1), count_ptr)
-        data = builder.gep(mem, [I32(4)])
+        data = builder.gep(mem, [I32(4)], name="data")
         builder.ret(data)
 
         # void rc_retain(byte* ptr)
@@ -54,7 +54,7 @@ class RCRuntime:
         builder = ir.IRBuilder(block)
 
         ptr = self.rc_retain_func.args[0]
-        header = builder.gep(ptr, [I32(-self.HEADER_SIZE)], inbounds=False)
+        header = builder.gep(ptr, [I32(-self.HEADER_SIZE)], inbounds=False, name="header")
         count_ptr = builder.bitcast(header, I32.as_pointer(), "count_ptr")
         old_count = builder.load(count_ptr, "old_count")
         new_count = builder.add(old_count, I32(1), "new_count")
@@ -79,8 +79,8 @@ class RCRuntime:
         data_ptr = self.rc_release_func.args[0]
         destructor = self.rc_release_func.args[1]
 
-        header_ptr = builder.gep(data_ptr, [I32(-self.HEADER_SIZE)], inbounds=False)
-        count_ptr = builder.bitcast(header_ptr, I32.as_pointer())
+        header_ptr = builder.gep(data_ptr, [I32(-self.HEADER_SIZE)], inbounds=False, name="header_ptr")
+        count_ptr = builder.bitcast(header_ptr, I32.as_pointer(), "count_ptr")
         old_count = builder.load(count_ptr, name="old_count")
         new_count = builder.sub(old_count, I32(1), name="new_count")
         builder.store(new_count, count_ptr)
@@ -91,7 +91,7 @@ class RCRuntime:
         builder.position_at_start(free_block)
 
         null_dtor = self.destructor_ptr_type(None) # basically just a nullptr
-        has_dtor = builder.icmp_unsigned("!=", destructor, null_dtor)
+        has_dtor = builder.icmp_unsigned("!=", destructor, null_dtor, "has_dtor")
         builder.cbranch(has_dtor, free_call_dtor_block, free_do_free_block)
 
         builder.position_at_start(free_call_dtor_block)
@@ -113,11 +113,11 @@ class Value:
 
     def __init__(self, builder: ir.IRBuilder, val_type: Type, initial_value: ir.Value) -> None:
         self.val_type = val_type
-        self.value_ptr = builder.alloca(self.val_type.llvm_type)
+        self.value_ptr = builder.alloca(self.val_type.llvm_type, name="value_ptr")
         builder.store(initial_value, self.value_ptr)
     
     def load_value(self, builder: ir.IRBuilder) -> ir.Value:
-        return builder.load(self.value_ptr)
+        return builder.load(self.value_ptr, "load_value")
     
     def store_value(self, builder: ir.IRBuilder, value: ir.Value) -> None:
         builder.store(value, self.value_ptr)
@@ -134,8 +134,8 @@ class Value:
         zero = ir.Constant(I32, 0)
         idx = ir.Constant(I32, self.val_type.field_indices[name])
         field_type = self.val_type.get_field(name)
-        internal_val_ptr = builder.gep(self.load_value(builder), [zero, idx])
-        internal_val = builder.load(internal_val_ptr)
+        internal_val_ptr = builder.gep(self.load_value(builder), [zero, idx], name="internal_val_ptr")
+        internal_val = builder.load(internal_val_ptr, "internal_val")
         return Value(builder, field_type.val_type, internal_val)
 
     def retain(self, builder: ir.IRBuilder, rc_runtime: RCRuntime) -> None:
@@ -149,18 +149,18 @@ class RCValue(Value):
     def __init__(self, builder: ir.IRBuilder, val_type: Type, initial_value: ir.Value, rc_runtime: RCRuntime, target_data: llvm.TargetData, allocate=True) -> None:
         self.val_type = val_type
         if allocate:
-            value_memory = builder.call(rc_runtime.rc_alloc_func, [I32(ArrayType.get_type_size(target_data, val_type.llvm_type))])
-            self.value_ptr = builder.bitcast(value_memory, val_type.llvm_type.as_pointer())
+            value_memory = builder.call(rc_runtime.rc_alloc_func, [I32(ArrayType.get_type_size(target_data, val_type.llvm_type))], "value_memory")
+            self.value_ptr = builder.bitcast(value_memory, val_type.llvm_type.as_pointer(), "value_ptr")
             builder.store(initial_value, self.value_ptr)
         else:
             self.value_ptr = initial_value
     
     def retain(self, builder: ir.IRBuilder, rc_runtime: RCRuntime) -> None:
-        raw_ptr = builder.bitcast(self.value_ptr, I8_POINTER)
+        raw_ptr = builder.bitcast(self.value_ptr, I8_POINTER, "raw_ptr")
         builder.call(rc_runtime.rc_retain_func, [raw_ptr])
     
     def release(self, builder: ir.IRBuilder, rc_runtime: RCRuntime) -> None:
-        raw_ptr = builder.bitcast(self.value_ptr, I8_POINTER)
+        raw_ptr = builder.bitcast(self.value_ptr, I8_POINTER, "raw_ptr")
         destructor = self.val_type.get_destructor()
         destructor_ptr = destructor if destructor else rc_runtime.destructor_ptr_type(None)
         builder.call(rc_runtime.rc_release_func, [raw_ptr, destructor_ptr])
@@ -170,12 +170,14 @@ class FunctionValue(Value):
     """Type for functions passed as values, has a call_this with args."""
 
     def __init__(self, builder: ir.IRBuilder, val_type: FunctionType, value: ir.Function) -> None:
-        super().__init__(builder, val_type, value)
+        self.val_type = val_type
         self.function_type = val_type
+        self.function = value
+        self.value_ptr = None
     
     def call_this(self, builder: ir.IRBuilder, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
         # TODO: Copy all primitive types.
-        result = builder.call(self.load_value(builder), [arg.load_value(builder) for arg in args], self.function_type.name)
+        result = builder.call(self.function, [arg.load_value(builder) for arg in args], self.function_type.name)
 
         if isinstance(self.function_type.returns, VoidType):
             return VoidValue()
@@ -311,16 +313,16 @@ class UserType(Type):
         builder = ir.IRBuilder(block)
 
         raw_ptr = self.destructor_func.args[0]
-        self_ptr = builder.bitcast(raw_ptr, self.llvm_type.as_pointer())
+        self_ptr = builder.bitcast(raw_ptr, self.llvm_type.as_pointer(), "self_ptr")
 
         for field_name, field in self.field_names.items():
             field_type = field.val_type
             if not field_type.needs_refcount:
                 continue
             idx = self.field_indices[field_name]
-            field_ptr = builder.gep(self_ptr, [I32(0), I32(idx)])
-            field_value = builder.load(field_ptr)
-            field_raw = builder.bitcast(field_value, I8_POINTER)
+            field_ptr = builder.gep(self_ptr, [I32(0), I32(idx)], name="field_ptr")
+            field_value = builder.load(field_ptr, "field_value")
+            field_raw = builder.bitcast(field_value, I8_POINTER, "field_raw")
             field_destructor = field_type.get_destructor()
             if field_destructor:
                 destructor_ptr = field_destructor
@@ -447,9 +449,9 @@ class BoolType(Type):
     
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
         if name == "==" or name == "!=":
-            out_ir = builder.icmp_unsigned(name, this.load_value(builder), args[0].load_value(builder))
+            out_ir = builder.icmp_unsigned(name, this.load_value(builder), args[0].load_value(builder), "arith_res")
         elif name == "!":
-            out_ir: ir.Instruction = builder.not_(this.load_value(builder)) # type: ignore
+            out_ir: ir.Instruction = builder.not_(this.load_value(builder), "arith_res") # type: ignore
         else:
             raise ValueError(f"Cannot call '{name}' on type '{self.name}'.")
         return Value(builder, self, out_ir)
@@ -486,17 +488,17 @@ class IntType(Type):
         out_type = None
         if name == "==" or name == "!=" or name == "<" or name == ">" or name == "<=" or name == ">=":
             out_type = BoolType(self.module)
-            out_ir = builder.icmp_unsigned(name, lhs, rhs)
+            out_ir = builder.icmp_unsigned(name, lhs, rhs, "arith_res")
         elif name == "+":
-            out_ir = builder.add(lhs, rhs)
+            out_ir = builder.add(lhs, rhs, "arith_res")
         elif name == "-":
-            out_ir = builder.sub(lhs, rhs)
+            out_ir = builder.sub(lhs, rhs, "arith_res")
         elif name == "*":
-            out_ir = builder.mul(lhs, rhs)
+            out_ir = builder.mul(lhs, rhs, "arith_res")
         elif name == "/":
-            out_ir = builder.sdiv(lhs, rhs)
+            out_ir = builder.sdiv(lhs, rhs, "arith_res")
         elif name == "-":
-            out_ir = builder.neg(lhs)
+            out_ir = builder.neg(lhs, "arith_res")
         else:
             raise ValueError(f"Cannot call '{name}' on type '{self.name}'.")
         return Value(builder, out_type if out_type else self, out_ir) # type: ignore
@@ -532,22 +534,22 @@ class FloatType(Type):
         rhs = args[0].load_value(builder)
         if name == "==" or name == "!=" or name == "<" or name == ">" or name == "<=" or name == ">=":
             out_type = BoolType(self.module)
-            out_ir = builder.fcmp_ordered(name, lhs, rhs)
+            out_ir = builder.fcmp_ordered(name, lhs, rhs, "arith_res")
         elif name == "+":
             out_type = self
-            out_ir = builder.fadd(lhs, rhs)
+            out_ir = builder.fadd(lhs, rhs, "arith_res")
         elif name == "-":
             out_type = self
-            out_ir = builder.fsub(lhs, rhs)
+            out_ir = builder.fsub(lhs, rhs, "arith_res")
         elif name == "*":
             out_type = self
-            out_ir = builder.fmul(lhs, rhs)
+            out_ir = builder.fmul(lhs, rhs, "arith_res")
         elif name == "/":
             out_type = self
-            out_ir = builder.fdiv(lhs, rhs)
+            out_ir = builder.fdiv(lhs, rhs, "arith_res")
         elif name == "-":
             out_type = self
-            out_ir = builder.neg(lhs)
+            out_ir = builder.neg(lhs, "arith_res")
         else:
             raise ValueError(f"Cannot call '{name}' on type '{self.name}'.")
         return Value(builder, out_type, out_ir) # type: ignore
@@ -583,13 +585,13 @@ class CharType(Type):
         rhs = args[0].load_value(builder)
         if name == "==" or name == "!=" or name == "<" or name == ">" or name == "<=" or name == ">=":
             out_type = BoolType(self.module)
-            out_ir = builder.icmp_unsigned(name, lhs, rhs)
+            out_ir = builder.icmp_unsigned(name, lhs, rhs, "arith_res")
         elif name == "+":
             out_type = self
-            out_ir = builder.add(lhs, rhs)
+            out_ir = builder.add(lhs, rhs, "arith_res")
         elif name == "-":
             out_type = self
-            out_ir = builder.sub(lhs, rhs)
+            out_ir = builder.sub(lhs, rhs, "arith_res")
         else:
             raise ValueError(f"Cannot call '{name}' on type '{self.name}'.")
         return Value(builder, out_type, out_ir) # type: ignore
@@ -642,21 +644,21 @@ class ArrayType(Type):
         initial_count = self.init_func.args[0]
 
         struct_size = I32(16)
-        storage_memory = builder.call(rc_runtime.rc_alloc_func, [struct_size])
-        array_inst: ir.CastInstr = builder.bitcast(storage_memory, self.array_pointer_type) # type: ignore
+        storage_memory = builder.call(rc_runtime.rc_alloc_func, [struct_size], "storage_memory")
+        array_inst: ir.CastInstr = builder.bitcast(storage_memory, self.array_pointer_type, "array_inst") # type: ignore
 
         element_size = self.get_type_size(target, contains.llvm_type)
-        initial_size = builder.mul(initial_count, I32(element_size))
-        initial_memory = builder.call(runtime.malloc, [initial_size])
-        data_ptr = builder.bitcast(initial_memory, self.contains_ptr_type)
+        initial_size = builder.mul(initial_count, I32(element_size), "initial_size")
+        initial_memory = builder.call(runtime.malloc, [initial_size], "initial_memory")
+        data_ptr = builder.bitcast(initial_memory, self.contains_ptr_type, "data_ptr")
 
-        data_addr = self.get_struct_val(builder, array_inst, 0)
+        data_addr = self.get_struct_val(builder, array_inst, 0, "data_addr")
         builder.store(data_ptr, data_addr)
 
-        size_addr = self.get_struct_val(builder, array_inst, 1)
+        size_addr = self.get_struct_val(builder, array_inst, 1, "size_addr")
         builder.store(I32(0), size_addr)
 
-        capacity_addr = self.get_struct_val(builder, array_inst, 2)
+        capacity_addr = self.get_struct_val(builder, array_inst, 2, "capacity_addr")
         builder.store(initial_size, capacity_addr)
 
         builder.ret(array_inst)
@@ -672,25 +674,25 @@ class ArrayType(Type):
         array_pointer = self.append.args[0]
         to_append = self.append.args[1]
 
-        data_ptr_addr = self.get_struct_val(builder, array_pointer, 0)
-        size_addr = self.get_struct_val(builder, array_pointer, 1)
-        cap_addr = self.get_struct_val(builder, array_pointer,2)
-        current_size = builder.load(size_addr)
-        current_capacity = builder.load(cap_addr)
+        data_ptr_addr = self.get_struct_val(builder, array_pointer, 0, "data_ptr_addr")
+        size_addr = self.get_struct_val(builder, array_pointer, 1, "size_addr")
+        cap_addr = self.get_struct_val(builder, array_pointer,2, "cap_addr")
+        current_size = builder.load(size_addr, "current_size")
+        current_capacity = builder.load(cap_addr, "current_capacity")
 
-        grow_necessary = builder.icmp_unsigned(">=", current_size, current_capacity)
+        grow_necessary = builder.icmp_unsigned(">=", current_size, current_capacity, "grow_necessary")
         builder.cbranch(grow_necessary, grow_block, store_block)
 
         builder.position_at_start(grow_block)
 
-        new_capacity = builder.mul(current_capacity, I32(2))
-        new_mem_size = builder.mul(new_capacity, I32(element_size))
+        new_capacity = builder.mul(current_capacity, I32(2), "new_capacity")
+        new_mem_size = builder.mul(new_capacity, I32(element_size), "new_mem_size")
 
-        old_data_ptr = builder.load(data_ptr_addr)
-        old_data_void = builder.bitcast(old_data_ptr, I8_POINTER)
+        old_data_ptr = builder.load(data_ptr_addr, "old_data_ptr")
+        old_data_void = builder.bitcast(old_data_ptr, I8_POINTER, "old_data_void")
 
-        new_memory = builder.call(runtime.realloc, [old_data_void, new_mem_size])
-        new_data_ptr = builder.bitcast(new_memory, self.contains_ptr_type)
+        new_memory = builder.call(runtime.realloc, [old_data_void, new_mem_size], "new_memory")
+        new_data_ptr = builder.bitcast(new_memory, self.contains_ptr_type, "new_data_ptr")
 
         builder.store(new_data_ptr, data_ptr_addr)
         builder.store(new_capacity, cap_addr)
@@ -698,11 +700,11 @@ class ArrayType(Type):
 
         builder.position_at_start(store_block)
 
-        data_ptr = builder.load(data_ptr_addr)
-        insert_addr = builder.gep(data_ptr, [current_size])
+        data_ptr = builder.load(data_ptr_addr, "data_ptr")
+        insert_addr = builder.gep(data_ptr, [current_size], name="insert_addr")
         builder.store(to_append, insert_addr)
 
-        new_size = builder.add(current_size, I32(1))
+        new_size = builder.add(current_size, I32(1), "new_size")
         builder.store(new_size, size_addr)
 
         builder.ret_void()
@@ -715,15 +717,15 @@ class ArrayType(Type):
 
         array_pointer = self.free_array_func.args[0] # TODO: This needs to be bitcasted to type?
 
-        data_ptr_addr = self.get_struct_val(builder, array_pointer, 0)
-        data_ptr = builder.load(data_ptr_addr)
-        data_void = builder.bitcast(data_ptr, I8_POINTER)
+        data_ptr_addr = self.get_struct_val(builder, array_pointer, 0, "data_ptr_addr")
+        data_ptr = builder.load(data_ptr_addr, "data_ptr")
+        data_void = builder.bitcast(data_ptr, I8_POINTER, "data_void")
 
         # Free all the elements stored in the array.
         builder.call(runtime.free, [data_void])
 
         # Free the whole struct.
-        arr_void = builder.bitcast(array_pointer, I8_POINTER)
+        arr_void = builder.bitcast(array_pointer, I8_POINTER, "arr_void")
         builder.call(runtime.free, [arr_void])
 
         builder.ret_void()
@@ -737,28 +739,28 @@ class ArrayType(Type):
         builder = ir.IRBuilder(block)
 
         array_pointer = self.destructor_func.args[0]
-        this: ir.CastInstr = builder.bitcast(array_pointer, self.array_pointer_type) # type: ignore
+        this: ir.CastInstr = builder.bitcast(array_pointer, self.array_pointer_type, "this") # type: ignore
         
-        size_ptr = self.get_struct_val(builder, this, 1)
+        size_ptr = self.get_struct_val(builder, this, 1, "size_addr")
         size = builder.load(size_ptr, "size")
-        data_ptr_ptr = self.get_struct_val(builder, this, 0)
-        data_ptr = builder.load(data_ptr_ptr)
+        data_ptr_ptr = self.get_struct_val(builder, this, 0, "data_ptr_ptr")
+        data_ptr = builder.load(data_ptr_ptr, "data_ptr")
 
-        i = builder.alloca(I32)
+        i = builder.alloca(I32, name="i")
         builder.store(I32(0), i)
         builder.branch(loop_check_block)
 
         builder.position_at_start(loop_check_block)
 
         current_i = builder.load(i, "current_i")
-        done = builder.icmp_unsigned("==", current_i, size)
+        done = builder.icmp_unsigned("==", current_i, size, "is_done")
         builder.cbranch(done, after_loop_block, loop_body_block)
 
         builder.position_at_start(loop_body_block)
 
         if contains.needs_refcount:
-            elem_ptr = builder.gep(data_ptr, [current_i])
-            elem_raw = builder.bitcast(elem_ptr, I8_POINTER)
+            elem_ptr = builder.gep(data_ptr, [current_i], name="elem_ptr")
+            elem_raw = builder.bitcast(elem_ptr, I8_POINTER, "elem_raw")
             possible_destructor = contains.get_destructor()
             if possible_destructor:
                 destructor_ptr = possible_destructor
@@ -767,17 +769,16 @@ class ArrayType(Type):
                 destructor_ptr = ir.Constant(destructor_fn_ty.as_pointer(), None)
             builder.call(rc_runtime.rc_release_func, [elem_raw, destructor_ptr]) # Not if this is how we should pass the destructor
 
-        next_i = builder.add(current_i, I32(1))
+        next_i = builder.add(current_i, I32(1), "next_i")
         builder.store(next_i, i)
         builder.branch(loop_check_block)
 
         builder.position_at_start(after_loop_block)
 
-        data_void = builder.bitcast(data_ptr, I8_POINTER)
+        data_void = builder.bitcast(data_ptr, I8_POINTER, "data_void")
         builder.call(runtime.free, [data_void])
 
         builder.ret_void()
-
     
     @property
     def llvm_type(self) -> ir.Type:
@@ -821,11 +822,11 @@ class ArrayType(Type):
             raise ValueError(f"Cannot call '{name}' on type '{self.name}'")
     
     def generate(self, builder: ir.IRBuilder) -> Value:
-        return Value(builder, self, builder.call(self.init_func, [I32(1)]))
+        return Value(builder, self, builder.call(self.init_func, [I32(1)], "initial_value"))
     
     @staticmethod
-    def get_struct_val(builder: ir.IRBuilder, struct: ir.Value, index: int):
-        return builder.gep(struct, [ir.Constant(I32, 0), ir.Constant(I32, index)])
+    def get_struct_val(builder: ir.IRBuilder, struct: ir.Value, index: int, name: str):
+        return builder.gep(struct, [ir.Constant(I32, 0), ir.Constant(I32, index)], name=name)
     
     @staticmethod
     def get_type_size(target_data: llvm.TargetData, ir_type: ir.Type) -> int:
