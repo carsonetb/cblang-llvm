@@ -138,7 +138,7 @@ class Compiler:
         if not on:
             return self.get_field(expr.name).value
         try:
-            return on.get(self.builder, expr.name.raw)
+            return on.get(self.builder, expr.name.raw, self.rc_runtime, self.target_data)
         except KeyError:
             raise compile_error(expr.name, f"Type '{on.val_type.name}' has no member '{expr.name}'")
 
@@ -395,7 +395,6 @@ class Compiler:
             inside_ptr = function_value.args[0] # type: ignore
             for name, ind in inside.field_indices.items():
                 member_addr = self.builder.gep(inside_ptr, [I32(0), I32(ind)], name=f"{name}")
-                print(member_addr)
                 hl_field = inside.field_names[name]
                 if hl_field.val_type.needs_refcount:
                     value = RCValue(self.builder, hl_field.val_type, member_addr, self.rc_runtime, self.target_data, allocate=False)
@@ -447,6 +446,7 @@ class Compiler:
         raw_ptr = self.builder.call(self.rc_runtime.rc_alloc_func, [size], "raw_ptr")
         this_ptr = self.builder.bitcast(raw_ptr, out.llvm_type.as_pointer(), "this_ptr")
 
+        member_index = 0
         for index, arg in enumerate(initializer_value.args):
             zero = ir.Constant(I32, 0)
             idx = ir.Constant(I32, index)
@@ -457,6 +457,7 @@ class Compiler:
             type_name = generate.args[index]
             arg_type = self.get_type(type_name[0])
             self.add_field(type_name[1], ValueField(arg_type, Value(self.builder, arg_type, arg)))
+            member_index += 1
         
         for member in generate.members:
             if isinstance(member, Class):
@@ -464,8 +465,11 @@ class Compiler:
                 continue
             if isinstance(member, Function):
                 self.gen_function_header(member, out)
+                # TODO: I think the function pointer pointer needs to be stored in the class.
             if isinstance(member, VarDecl):
                 self.gen_var_declaration(member)
+
+            member_index += 1
 
         class_scope = self.scoped_variables[-1]
         for name, field in class_scope.items():
@@ -479,6 +483,17 @@ class Compiler:
             init_func = cast(FunctionValue, init_field.value)
             # TODO: Check that the init function doesn't return and doesn't have any args.
             init_func.call_this(self.builder, [], self.rc_runtime, self.target_data)
+        
+        # In the initializer, copy all initialized values into the object.
+        for name, field in class_scope.items():
+            if isinstance(field.value, FunctionValue):
+                # TODO: Copy function pointer into slot.
+                continue
+            index = out.field_indices[name]
+            generated_member = field.value.load_value(self.builder)
+            loaded = self.builder.gep(this_ptr, [I32(0), I32(index)], name="loaded")
+            actual_member_ptr = self.builder.bitcast(loaded, field.val_type.llvm_type.as_pointer(), "actual_member_ptr") # Might be an unecessary bitcast?
+            self.builder.store(generated_member, actual_member_ptr)
         
         for member in generate.members:
             if isinstance(member, (Class, VarDecl)):

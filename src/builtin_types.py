@@ -112,9 +112,11 @@ class RCRuntime:
 
 
 class Value:
-    """Base value for CBLang. Contains a Type and LLVM Value."""
+    """Base value for CBLang. Contains a Type and LLVM Value.
+    This value is stack allocated, and copied when referenced (
+    besides some specific cases)."""
 
-    def __init__(self, builder: ir.IRBuilder, val_type: Type, initial_value: ir.Value, allocate=False) -> None:
+    def __init__(self, builder: ir.IRBuilder, val_type: Type, initial_value: ir.Value, allocate=True) -> None:
         self.val_type = val_type
         if allocate:
             self.value_ptr = builder.alloca(self.val_type.llvm_type, name="value_ptr")
@@ -131,7 +133,7 @@ class Value:
     def call(self, builder: ir.IRBuilder, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
         return self.val_type.call(builder, self, name, args, rc_runtime, target_data)
     
-    def get(self, builder: ir.IRBuilder, name: str) -> Value:
+    def get(self, builder: ir.IRBuilder, name: str, rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
         if isinstance(self.val_type, ArrayType):
             pass
             # TODO: Array type.
@@ -140,9 +142,13 @@ class Value:
         zero = I32(0)
         idx = ir.Constant(I32, self.val_type.field_indices[name])
         field_type = self.val_type.get_field(name)
-        internal_val_ptr = builder.gep(self.value_ptr, [zero, idx], name="internal_val_ptr")
-        internal_val = builder.load(internal_val_ptr, "internal_val")
-        return Value(builder, field_type.val_type, internal_val)
+        internal_val_mem = builder.gep(self.value_ptr, [zero, idx], name="internal_val_mem")
+        internal_val_ptr: ir.CastInstr = builder.bitcast(internal_val_mem, field_type.val_type.llvm_type.as_pointer()) # type: ignore
+        if field_type.val_type.needs_refcount:
+            return RCValue(builder, field_type.val_type, internal_val_ptr, rc_runtime, target_data, allocate=False)
+        else:
+            internal_val = builder.load(internal_val_ptr, "internal_val")
+            return Value(builder, field_type.val_type, internal_val)
 
     def retain(self, builder: ir.IRBuilder, rc_runtime: RCRuntime) -> None:
         pass

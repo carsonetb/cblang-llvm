@@ -88,13 +88,18 @@ entry:
   %"this_ptr" = bitcast i8* %"raw_ptr" to %"TestClass"*
   %"value_ptr" = alloca i32
   store i32 0, i32* %"value_ptr"
+  %"load_value" = load i32, i32* %"value_ptr"
+  %"loaded" = getelementptr %"TestClass", %"TestClass"* %"this_ptr", i32 0, i32 0
+  store i32 %"load_value", i32* %"loaded"
   ret %"TestClass"* %"this_ptr"
 }
 
 define i32 @"main__test__TestClass__num2"(%"TestClass"* %".1")
 {
 entry:
-  %"load_value" = load i32, i32* %"value_ptr"
+  %"x" = getelementptr %"TestClass", %"TestClass"* %".1", i32 0, i32 0
+  %"num2" = getelementptr %"TestClass", %"TestClass"* %".1", i32 0, i32 1
+  %"load_value" = load i32, i32* %"x"
   ret i32 %"load_value"
 }
 
@@ -102,8 +107,8 @@ define i32 @"main__test__num"()
 {
 entry:
   %"TestClass" = call %"TestClass"* @"main__test__TestClass__init"()
-  %"internal_val_ptr" = getelementptr %"TestClass", %"TestClass"* %"TestClass", i32 0, i32 0
-  %"internal_val" = load i32, i32* %"internal_val_ptr"
+  %"internal_val_mem" = getelementptr %"TestClass", %"TestClass"* %"TestClass", i32 0, i32 0
+  %"internal_val" = load i32, i32* %"internal_val_mem"
   %"value_ptr" = alloca i32
   store i32 %"internal_val", i32* %"value_ptr"
   %"raw_ptr" = bitcast %"TestClass"* %"TestClass" to i8*
