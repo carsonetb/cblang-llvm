@@ -2,7 +2,7 @@
 target triple = "unknown-unknown-unknown"
 target datalayout = ""
 
-%"TestClass" = type {i32, i32 ()*}
+%"TestClass" = type {i32, i32 (%"TestClass"*)*}
 declare i8* @"malloc"(i32 %".1")
 
 declare i8* @"realloc"(i8* %".1", i32 %".2")
@@ -91,6 +91,8 @@ entry:
   %"load_value" = load i32, i32* %"value_ptr"
   %"loaded" = getelementptr %"TestClass", %"TestClass"* %"this_ptr", i32 0, i32 0
   store i32 %"load_value", i32* %"loaded"
+  %"loaded.1" = getelementptr %"TestClass", %"TestClass"* %"this_ptr", i32 0, i32 1
+  store i32 (%"TestClass"*)* @"main__test__TestClass__num2", i32 (%"TestClass"*)** %"loaded.1"
   ret %"TestClass"* %"this_ptr"
 }
 

@@ -40,6 +40,7 @@ class Compiler:
         self.scoped_variables: list[dict[str, ValueField]] = [{
             "print": self.get_printf()
         }] # Start with the global scope.
+        self.inside_ptr: ir.Value | None = None # The class passed to the function currenlty being processed.
     
     @property
     def scope(self) -> dict[str, ValueField]:
@@ -126,6 +127,10 @@ class Compiler:
             field = self.get_field(expr.callee)
             if not isinstance(field.value, FunctionValue):
                 raise compile_error(expr.callee, f"Cannot call '{expr.callee}' because it is not a function.")
+            if field.value.is_this_member:
+                assert self.inside_ptr is not None
+                converted = [self.inside_ptr] + [arg.load_value(self.builder) for arg in args]
+                return field.value.call_this_basic(self.builder, converted, self.rc_runtime, self.target_data)
             return field.value.call_this(self.builder, args, self.rc_runtime, self.target_data)
         try:
             return on.call(self.builder, expr.callee.raw, args, self.rc_runtime, self.target_data)
@@ -366,13 +371,14 @@ class Compiler:
 
         return field
     
+    # TODO: Static functions don't do a lot of this shit
     def gen_function_header(self, generate: Function, inside: UserType | None = None) -> ValueField:
         arg_types = self.gen_arg_types(generate.args)
-        type_list = [arg_type for _, arg_type in arg_types]
+        type_list = ([cast(UserType, inside)] if inside else []) + [arg_type for _, arg_type in arg_types]
         return_type = self.get_type(generate.returns) if generate.returns else VoidType(self.module)
-        args: list[ir.Type] = [inside.llvm_type.as_pointer()] if inside else []
+        args: list[ir.Type] = []
         for arg in type_list:
-            args.append(arg.llvm_type)
+            args.append(arg.llvm_type.as_pointer() if arg.needs_refcount else arg.llvm_type)
         ir_function_ty = ir.FunctionType(return_type.llvm_type, args)
         function_value = ir.Function(self.module, ir_function_ty, f"{self.path}__{generate.name.raw}")
         
@@ -391,13 +397,16 @@ class Compiler:
         self.scoped_variables.append({})
 
         # Add class members to scope.
+        self.inside_ptr = None
         if inside:
-            inside_ptr = function_value.args[0] # type: ignore
+            self.inside_ptr = function_value.args[0] # type: ignore
             for name, ind in inside.field_indices.items():
-                member_addr = self.builder.gep(inside_ptr, [I32(0), I32(ind)], name=f"{name}")
+                member_addr = self.builder.gep(self.inside_ptr, [I32(0), I32(ind)], name=f"{name}")
                 hl_field = inside.field_names[name]
                 if hl_field.val_type.needs_refcount:
                     value = RCValue(self.builder, hl_field.val_type, member_addr, self.rc_runtime, self.target_data, allocate=False)
+                elif isinstance(hl_field.val_type, FunctionType):
+                    value = FunctionValue(self.builder, hl_field.val_type, hl_field.val_type.function, is_this_member=True)
                 else:
                     value = Value(self.builder, hl_field.val_type, member_addr, allocate=False)
                 self.scope[name] = ValueField(hl_field.val_type, value, hl_field.flags)
@@ -465,7 +474,6 @@ class Compiler:
                 continue
             if isinstance(member, Function):
                 self.gen_function_header(member, out)
-                # TODO: I think the function pointer pointer needs to be stored in the class.
             if isinstance(member, VarDecl):
                 self.gen_var_declaration(member)
 
@@ -486,26 +494,23 @@ class Compiler:
         
         # In the initializer, copy all initialized values into the object.
         for name, field in class_scope.items():
-            if isinstance(field.value, FunctionValue):
-                # TODO: Copy function pointer into slot.
-                continue
             index = out.field_indices[name]
-            generated_member = field.value.load_value(self.builder)
+            generated_member = field.value.load_value(self.builder) if not isinstance(field.value, FunctionValue) else field.value.function
             loaded = self.builder.gep(this_ptr, [I32(0), I32(index)], name="loaded")
             actual_member_ptr = self.builder.bitcast(loaded, field.val_type.llvm_type.as_pointer(), "actual_member_ptr") # Might be an unecessary bitcast?
             self.builder.store(generated_member, actual_member_ptr)
-        
-        for member in generate.members:
-            if isinstance(member, (Class, VarDecl)):
-                continue
-            func = self.get_field(member.name)
-            assert isinstance(func.value, FunctionValue)
-            self.gen_function_definition(member, func.value.function, out)
 
         self.pop_scope()
         self.builder.ret(this_ptr)
         self.builder_stack.pop()
         self.path_array.pop()
+        
+        for member in generate.members:
+            if isinstance(member, (Class, VarDecl)):
+                continue
+            func = class_scope[member.name.raw]
+            assert isinstance(func.value, FunctionValue)
+            self.gen_function_definition(member, func.value.function, out)
 
         self.type_db[out.name] = out
         self.add_field(generate.name, initializer_field)

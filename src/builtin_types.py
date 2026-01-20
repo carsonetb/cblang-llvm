@@ -181,15 +181,19 @@ class RCValue(Value):
 class FunctionValue(Value):
     """Type for functions passed as values, has a call_this with args."""
 
-    def __init__(self, builder: ir.IRBuilder, val_type: FunctionType, value: ir.Function) -> None:
+    def __init__(self, builder: ir.IRBuilder, val_type: FunctionType, value: ir.Function, is_this_member=False) -> None:
         self.val_type = val_type
         self.function_type = val_type
         self.function = value
         self.value_ptr = None
+        self.is_this_member = False
     
     def call_this(self, builder: ir.IRBuilder, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
+        return self.call_this_basic(builder, [arg.load_value(builder) for arg in args], rc_runtime, target_data)
+    
+    def call_this_basic(self, builder: ir.IRBuilder, args: list[ir.Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
         # TODO: Copy all primitive types.
-        result = builder.call(self.function, [arg.load_value(builder) for arg in args], self.function_type.name)
+        result = builder.call(self.function, args, self.function_type.name)
 
         if isinstance(self.function_type.returns, VoidType):
             return VoidValue()
@@ -355,7 +359,7 @@ class FunctionType(Type):
     def __init__(self, module: ir.Module, name: str, args: list[Type], returns: Type, function: ir.Function) -> None:
         super().__init__(module)
         self._name = name
-        self._llvm_type = ir.FunctionType(returns.llvm_type, (arg.llvm_type for arg in args)).as_pointer()
+        self._llvm_type = ir.FunctionType(returns.llvm_type, ((arg.llvm_type.as_pointer() if arg.needs_refcount else arg.llvm_type) for arg in args)).as_pointer()
         self.returns = returns
         self.args = args
         self.function = function
