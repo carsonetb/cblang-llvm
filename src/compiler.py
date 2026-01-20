@@ -24,12 +24,12 @@ class Compiler:
         self.module = ir.Module(self.module_name)
         self.c_runtime = CRuntime(self.module)
         self.rc_runtime = RCRuntime(self.module, self.c_runtime)
-        self.scoped_variables: list[dict[str, ValueField]] = [{}] # Start with the global scope.
         self.type_db: dict[str, Type] = {
             'bool': BoolType(self.module),
             'int': IntType(self.module),
             'float': FloatType(self.module),
-            'string': StringType(self.module, 1),
+            'char': CharType(self.module),
+            'string': StringType(self.module, self.c_runtime),
         }
         self.path_array = [package, module_name]
 
@@ -37,6 +37,9 @@ class Compiler:
         self.main_func = ir.Function(self.module, self.main_func_ty, f"main")
         block = self.main_func.append_basic_block("entry")
         self.builder_stack = [ir.IRBuilder(block)]
+        self.scoped_variables: list[dict[str, ValueField]] = [{
+            "print": self.get_printf()
+        }] # Start with the global scope.
     
     @property
     def scope(self) -> dict[str, ValueField]:
@@ -49,6 +52,11 @@ class Compiler:
     @property
     def path(self) -> str:
         return "__".join(self.path_array)
+    
+    def get_printf(self) -> ValueField:
+        printf_type = FunctionType(self.module, "printf", [self.type_db["string"]], self.type_db["int"], self.c_runtime.printf_func)
+        printf_val = FunctionValue(self.builder, printf_type, self.c_runtime.printf_func)
+        return ValueField(printf_type, printf_val, {MemberFlag.STATIC})
     
     def get_type(self, name: Token) -> Type:
         if not name.raw in self.type_db:
@@ -77,9 +85,12 @@ class Compiler:
 
     def gen_string_literal(self, string: str) -> Value:
         b_string = bytearray(string.encode("utf8") + b"\0")
-        string_t = StringType(self.module, len(b_string))
-        constant = ir.Constant(string_t.llvm_type, len(b_string))
-        return Value(self.builder, string_t, constant)
+        constant_type = ir.ArrayType(I8, len(b_string))
+        constant = constant_type(b_string)
+        mem = self.builder.call(self.c_runtime.malloc, [I32(len(b_string))], "mem")
+        alloced_array = self.builder.bitcast(mem, constant_type.as_pointer(), "alloced_array")
+        self.builder.store(constant, alloced_array)
+        return RCValue(self.builder, self.type_db["string"], mem, self.rc_runtime, self.target_data)
     
     def pop_scope(self) -> dict[str, ValueField]:
         scope = self.scoped_variables.pop()
@@ -131,15 +142,21 @@ class Compiler:
         except KeyError:
             raise compile_error(expr.name, f"Type '{on.val_type.name}' has no member '{expr.name}'")
 
-    def gen_accessible(self, expr: Accessible, can_be_void=False) -> Value | VoidValue:
+    def gen_accessible(self, expr: Accessible, on: Value | None = None, can_be_void=False) -> Value | VoidValue:
         if isinstance(expr, CallExpr):
-            possibly_void = self.gen_function_call(expr)
-            if isinstance(possibly_void, VoidValue):
+            possibly_void = self.gen_function_call(expr, on)
+            if isinstance(possibly_void, VoidValue) and (not can_be_void or expr.access):
                 raise compile_error(expr.callee, "Function cannot return void.")
-            return possibly_void
-        if isinstance(expr, VariableExpr):
-            return self.gen_variable_expr(expr)
-        assert(False)
+            out = possibly_void
+        elif isinstance(expr, VariableExpr):
+            out = self.gen_variable_expr(expr, on)
+        else:
+            assert False
+        
+        if expr.access:
+            assert not isinstance(out, VoidValue)
+            return self.gen_accessible(expr.access, out, can_be_void)
+        return out
 
     def gen_binary(self, expr: BinaryExpr) -> Value:
         lhs = self.gen_expression(expr.lhs)
@@ -194,7 +211,7 @@ class Compiler:
         if isinstance(expr, LiteralExpr):
             return self.gen_literal(expr)
         if isinstance(expr, Accessible):
-            possibly_void = self.gen_accessible(expr, can_be_void)
+            possibly_void = self.gen_accessible(expr, can_be_void=can_be_void)
             assert not (isinstance(possibly_void, VoidValue) and not can_be_void)
             return possibly_void
         if isinstance(expr, BinaryExpr):
@@ -216,20 +233,8 @@ class Compiler:
     def gen_var_declaration(self, stmt: VarDecl) -> None:
         var_type = self.get_type(stmt.type_name[0])
         name = stmt.type_name[1]
-        if stmt.value:
-            value = self.gen_expression(stmt.value)
-            assert not isinstance(value, VoidValue)
-        else:
-            if isinstance(var_type, (BoolType, IntType, FloatType, CharType)):
-                value = Value(self.builder, var_type, ir.Constant(var_type.llvm_type, 0))
-            elif isinstance(var_type, StringType):
-                value = self.gen_string_literal("")
-            elif isinstance(var_type, ArrayType):
-                value = var_type.generate(self.builder)
-            elif isinstance(var_type, UserType):
-                raise compile_error(name, "Must provide an initializer for non-builtin types.")
-            else:
-                raise ValueError("Unknown type")
+        value = self.gen_expression(stmt.value)
+        assert not isinstance(value, VoidValue)
         self.add_field(name, ValueField(var_type, value, stmt.flags))
 
     def gen_assignment(self, stmt: AssignmentStmt) -> None:
@@ -353,15 +358,14 @@ class Compiler:
         var_type = self.get_type(generate.type_name[0])
         expr_value = self.gen_expression(generate.value)
         assert not isinstance(expr_value, VoidValue)
-        value = expr_value.value_ptr
         # TODO: Check casting
-        if not expr_value.val_type == var_type.name:
+        if expr_value.val_type.name != var_type.name:
             raise compile_error(generate.type_name[0], f"Cannot assign '{expr_value.val_type.name}' to '{var_type.name}'")
     
         if var_type.needs_refcount:
-            hl_value = RCValue(self.builder, var_type, value, self.rc_runtime, self.target_data)
+            hl_value = RCValue(self.builder, var_type, expr_value.value_ptr, self.rc_runtime, self.target_data)
         else:
-            hl_value = Value(self.builder, var_type, value)
+            hl_value = expr_value
         field = ValueField(var_type, hl_value, generate.flags)
         
         self.add_field(var_name, field)
@@ -386,13 +390,15 @@ class Compiler:
                 elif generate.returns is None and not possible_ret is VoidValue:
                     raise compile_error(generate.name, f"Function has no return type, but has a line that returns non-void.")
                 elif isinstance(possible_ret, Value) and not generate.returns is None and possible_ret.val_type.name != return_type.name:
-                    raise compile_error(generate.name, f"Function does not always return type '{generate.returns.raw}'")
+                    raise compile_error(generate.name, f"Function does not always return type '{generate.returns.raw}' but instead type '{possible_ret.val_type.name}'")
                 break
         
         if not block.is_terminated:
+            self.pop_scope()
             self.builder.ret_void()
+        else:
+            self.scoped_variables.pop() # RC will already be handled by return statement or above.
         self.builder_stack.pop()
-        self.pop_scope()
 
         function_type = FunctionType( self.module, generate.name.raw, type_list, return_type, function_value)
         function_field = ValueField(function_type, FunctionValue(self.builder, function_type, function_value), generate.member_flags | generate.function_flags)
@@ -441,6 +447,9 @@ class Compiler:
         class_scope = self.pop_scope()
         for name, field in class_scope.items():
             out.add_field(name, field)
+        if len(class_scope.items()) == 0:
+            out.add_field("dummy_value", Field(BoolType(self.module), {}))
+        out.finalize()
 
         init_field = out.get_field("init") if out.has_field("init") else None
         if init_field and isinstance(init_field, ValueField) and isinstance(init_field.value, FunctionValue):

@@ -2,12 +2,14 @@
 target triple = "unknown-unknown-unknown"
 target datalayout = ""
 
-%"TestClass" = type opaque
+%"TestClass" = type {i32, i32 ()*}
 declare i8* @"malloc"(i32 %".1")
 
 declare i8* @"realloc"(i8* %".1", i32 %".2")
 
 declare void @"free"(i8* %".1")
+
+declare i32 @"printf"(i8* %".1", ...)
 
 define i8* @"rc_alloc"(i32 %".1")
 {
@@ -54,11 +56,18 @@ end:
   ret void
 }
 
+define void @"string_destructor"(i8* %".1")
+{
+entry:
+  %"start_ptr_ptr" = bitcast i8* %".1" to i8**
+  %"start_ptr" = load i8*, i8** %"start_ptr_ptr"
+  call void @"free"(i8* %"start_ptr")
+  ret void
+}
+
 define i32 @"main"()
 {
 entry:
-  %"raw_ptr" = bitcast %"TestClass"* %"TestClass" to i8*
-  call void @"rc_release"(i8* %"raw_ptr", void (i8*)* @"TestClass_destructor")
   call void @"main__test__main"()
   ret i32 0
 }
@@ -77,15 +86,26 @@ entry:
   %"size" = ptrtoint %"TestClass"* %"size_ptr" to i32
   %"raw_ptr" = call i8* @"rc_alloc"(i32 %"size")
   %"this_ptr" = bitcast i8* %"raw_ptr" to %"TestClass"*
+  %"value_ptr" = alloca i32
+  store i32 0, i32* %"value_ptr"
   ret %"TestClass"* %"this_ptr"
+}
+
+define i32 @"main__test__TestClass__num2"()
+{
+entry:
+  %"load_value" = load i32, i32* %"value_ptr"
+  ret i32 %"load_value"
 }
 
 define i32 @"main__test__num"()
 {
 entry:
   %"TestClass" = call %"TestClass"* @"main__test__TestClass__init"()
+  %"internal_val_ptr" = getelementptr %"TestClass", %"TestClass"* %"TestClass", i32 0, i32 0
+  %"internal_val" = load i32, i32* %"internal_val_ptr"
   %"value_ptr" = alloca i32
-  store i32 0, i32* %"value_ptr"
+  store i32 %"internal_val", i32* %"value_ptr"
   %"raw_ptr" = bitcast %"TestClass"* %"TestClass" to i8*
   call void @"rc_release"(i8* %"raw_ptr", void (i8*)* @"TestClass_destructor")
   %"load_value" = load i32, i32* %"value_ptr"
@@ -95,8 +115,22 @@ entry:
 define void @"main__test__main"()
 {
 entry:
+  %"mem" = call i8* @"malloc"(i32 13)
+  %"alloced_array" = bitcast i8* %"mem" to [13 x i8]*
+  store [13 x i8] c"Hello World!\00", [13 x i8]* %"alloced_array"
+  %"value_memory" = call i8* @"rc_alloc"(i32 8)
+  %"value_ptr" = bitcast i8* %"value_memory" to i8**
+  store i8* %"mem", i8** %"value_ptr"
+  %"raw_ptr" = bitcast i8** %"value_ptr" to i8*
+  call void @"rc_retain"(i8* %"raw_ptr")
+  %"load_value" = load i8*, i8** %"value_ptr"
+  %"printf" = call i32 (i8*, ...) @"printf"(i8* %"load_value")
+  %"value_ptr.1" = alloca i32
+  store i32 %"printf", i32* %"value_ptr.1"
   %"num" = call i32 @"main__test__num"()
-  %"value_ptr" = alloca i32
-  store i32 %"num", i32* %"value_ptr"
+  %"value_ptr.2" = alloca i32
+  store i32 %"num", i32* %"value_ptr.2"
+  %"raw_ptr.1" = bitcast i8** %"value_ptr" to i8*
+  call void @"rc_release"(i8* %"raw_ptr.1", void (i8*)* @"string_destructor")
   ret void
 }

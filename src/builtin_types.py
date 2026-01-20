@@ -15,7 +15,7 @@ class CRuntime:
     def __init__(self, module: ir.Module) -> None:
         self.module = module
 
-            # void* malloc(size_t size)
+        # void* malloc(size_t size)
         self.malloc_type = ir.FunctionType(I8_POINTER, [I32])
         self.malloc = ir.Function(self.module, self.malloc_type, name="malloc")
 
@@ -27,6 +27,9 @@ class CRuntime:
         self.free_type = ir.FunctionType(VOID, [I8_POINTER])
         self.free = ir.Function(self.module, self.free_type, name="free")
 
+        # int32 printf(char* str, ...)
+        self.printf_type = ir.FunctionType(I32, [I8_POINTER], True)
+        self.printf_func = ir.Function(self.module, self.printf_type, name="printf")
 
 class RCRuntime:
     HEADER_SIZE = 4 # bytes
@@ -131,10 +134,10 @@ class Value:
             # TODO: Array type.
         if not isinstance(self.val_type, UserType):
             raise RuntimeError("Primitive values don't have members.")
-        zero = ir.Constant(I32, 0)
+        zero = I32(0)
         idx = ir.Constant(I32, self.val_type.field_indices[name])
         field_type = self.val_type.get_field(name)
-        internal_val_ptr = builder.gep(self.load_value(builder), [zero, idx], name="internal_val_ptr")
+        internal_val_ptr = builder.gep(self.value_ptr, [zero, idx], name="internal_val_ptr")
         internal_val = builder.load(internal_val_ptr, "internal_val")
         return Value(builder, field_type.val_type, internal_val)
 
@@ -294,6 +297,9 @@ class UserType(Type):
 
         field_list = [f.val_type.llvm_type for f in self.field_names.values()]
         self.field_indices[name] = len(field_list) - 1
+    
+    def finalize(self) -> None:
+        field_list = [f.val_type.llvm_type for f in self.field_names.values()]
         self.llvm_type.set_body(*field_list)
     
     def get_field(self, name: str) -> Field:
@@ -365,6 +371,7 @@ class FunctionType(Type):
     
     def has_field(self, name: str) -> bool:
         return False
+
 
 class InternalType(Type):
     """For types inside other classes."""
@@ -598,13 +605,24 @@ class CharType(Type):
 
 
 class StringType(Type):
-    def __init__(self, module: ir.Module, length: int) -> None:
+    def __init__(self, module: ir.Module, c_runtime: CRuntime) -> None:
         super().__init__(module)
-        self.length = length
+
+        self.destructor_type = ir.FunctionType(VOID, [I8_POINTER])
+        self.destructor_func = ir.Function(self.module, self.destructor_type, "string_destructor")
+        block = self.destructor_func.append_basic_block("entry")
+        builder = ir.IRBuilder(block)
+
+        string_ptr = self.destructor_func.args[0]
+        start_ptr_ptr = builder.bitcast(string_ptr, I8_POINTER.as_pointer(), "start_ptr_ptr")
+        start_ptr = builder.load(start_ptr_ptr, "start_ptr")
+        start_void = builder.bitcast(start_ptr, I8_POINTER, "start_void")
+        builder.call(c_runtime.free, [start_void])
+        builder.ret_void()
     
     @property
-    def llvm_type(self) -> ir.ArrayType:
-        return ir.ArrayType(I8, I32(self.length))
+    def llvm_type(self) -> ir.Type:
+        return I8_POINTER
     
     @property
     def name(self) -> str:
@@ -612,7 +630,7 @@ class StringType(Type):
     
     @property
     def needs_refcount(self) -> bool:
-        return False
+        return True
     
     def add_field(self, name: str, field: Field) -> None:
         raise RuntimeError("Cannot add a field to the StringType.")
@@ -622,6 +640,9 @@ class StringType(Type):
     
     def has_field(self, name: str) -> bool:
         return False
+    
+    def get_destructor(self) -> ir.Function | None:
+        return self.destructor_func
 
 
 class ArrayType(Type):
