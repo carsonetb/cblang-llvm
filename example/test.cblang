@@ -1,12 +1,18 @@
 class TestClass = (
+    int x = 0,
 
+    scope num2 -> int = {
+        return x;
+    }
 )
 
 scope num -> int = {
     TestClass cls = TestClass();
-    return 0;
+    return cls.x;
 }
 
 scope main = {
+    string str = "Hello World!";
+    print(str);
     int x = num();
 }

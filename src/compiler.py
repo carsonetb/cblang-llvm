@@ -347,12 +347,6 @@ class Compiler:
 
         return out
     
-    def gen_member(self, member: Function | VarDecl) -> Field:
-        if isinstance(member, Function):
-            return self.gen_function_definition(member)
-        if isinstance(member, VarDecl):
-            return self.gen_variable(member)
-    
     def gen_variable(self, generate: VarDecl) -> Field:
         var_name = generate.type_name[1]
         var_type = self.get_type(generate.type_name[0])
@@ -371,17 +365,49 @@ class Compiler:
         self.add_field(var_name, field)
 
         return field
-
-    def gen_function_definition(self, generate: Function) -> ValueField:
+    
+    def gen_function_header(self, generate: Function, inside: UserType | None = None) -> ValueField:
         arg_types = self.gen_arg_types(generate.args)
         type_list = [arg_type for _, arg_type in arg_types]
         return_type = self.get_type(generate.returns) if generate.returns else VoidType(self.module)
-        ir_function_ty = ir.FunctionType(return_type.llvm_type, (arg.llvm_type for arg in type_list))
+        args: list[ir.Type] = [inside.llvm_type.as_pointer()] if inside else []
+        for arg in type_list:
+            args.append(arg.llvm_type)
+        ir_function_ty = ir.FunctionType(return_type.llvm_type, args)
         function_value = ir.Function(self.module, ir_function_ty, f"{self.path}__{generate.name.raw}")
         
+        function_type = FunctionType( self.module, generate.name.raw, type_list, return_type, function_value)
+        function_field = ValueField(function_type, FunctionValue(self.builder, function_type, function_value), generate.member_flags | generate.function_flags)
+        self.add_field(generate.name, function_field)
+
+        return function_field
+
+    def gen_function_definition(self, generate: Function, function_value: ir.Function, inside: UserType | None = None) -> None:
+        arg_types = self.gen_arg_types(generate.args)
+        return_type = self.get_type(generate.returns) if generate.returns else VoidType(self.module)
+
         block = function_value.append_basic_block("entry")
         self.builder_stack.append(ir.IRBuilder(block))
-        self.scoped_variables.append(dict([(arg_types[i][0], ValueField(arg_types[i][1], Value(self.builder, arg_types[i][1], arg))) for i, arg in enumerate(function_value.args)]))
+        self.scoped_variables.append({})
+
+        # Add class members to scope.
+        if inside:
+            inside_ptr = function_value.args[0] # type: ignore
+            for name, ind in inside.field_indices.items():
+                member_addr = self.builder.gep(inside_ptr, [I32(0), I32(ind)], name=f"{name}")
+                print(member_addr)
+                hl_field = inside.field_names[name]
+                if hl_field.val_type.needs_refcount:
+                    value = RCValue(self.builder, hl_field.val_type, member_addr, self.rc_runtime, self.target_data, allocate=False)
+                else:
+                    value = Value(self.builder, hl_field.val_type, member_addr, allocate=False)
+                self.scope[name] = ValueField(hl_field.val_type, value, hl_field.flags)
+
+        # Add arguments to scope.
+        if not inside or len(function_value.args) > 1:
+            for i, arg in enumerate(function_value.args if inside else function_value.args[1:]):
+                self.scope[arg_types[i][0]] = ValueField(arg_types[i][1], Value(self.builder, arg_types[i][1], arg))
+
         for stmt in generate.body:
             possible_ret = self.gen_statement(stmt)
             if not possible_ret is None:
@@ -399,12 +425,6 @@ class Compiler:
         else:
             self.scoped_variables.pop() # RC will already be handled by return statement or above.
         self.builder_stack.pop()
-
-        function_type = FunctionType( self.module, generate.name.raw, type_list, return_type, function_value)
-        function_field = ValueField(function_type, FunctionValue(self.builder, function_type, function_value), generate.member_flags | generate.function_flags)
-        self.add_field(generate.name, function_field)
-
-        return function_field
     
     def gen_class(self, generate: Class) -> UserType:
         out = UserType(self.module, generate.name.raw, self.rc_runtime)
@@ -442,9 +462,12 @@ class Compiler:
             if isinstance(member, Class):
                 # TODO: Inner classes
                 continue
-            self.gen_member(member)
+            if isinstance(member, Function):
+                self.gen_function_header(member, out)
+            if isinstance(member, VarDecl):
+                self.gen_var_declaration(member)
 
-        class_scope = self.pop_scope()
+        class_scope = self.scoped_variables[-1]
         for name, field in class_scope.items():
             out.add_field(name, field)
         if len(class_scope.items()) == 0:
@@ -457,6 +480,14 @@ class Compiler:
             # TODO: Check that the init function doesn't return and doesn't have any args.
             init_func.call_this(self.builder, [], self.rc_runtime, self.target_data)
         
+        for member in generate.members:
+            if isinstance(member, (Class, VarDecl)):
+                continue
+            func = self.get_field(member.name)
+            assert isinstance(func.value, FunctionValue)
+            self.gen_function_definition(member, func.value.function, out)
+
+        self.pop_scope()
         self.builder.ret(this_ptr)
         self.builder_stack.pop()
         self.path_array.pop()
@@ -474,7 +505,10 @@ class Compiler:
             if isinstance(stmt, Class):
                 self.gen_class(stmt)
             elif isinstance(stmt, Function):
-                self.gen_function_definition(stmt)
+                self.gen_function_header(stmt)
+                field = self.get_field(stmt.name)
+                assert isinstance(field.value, FunctionValue)
+                self.gen_function_definition(stmt, field.value.function)
             elif isinstance(stmt, VarDecl):
                 self.gen_var_declaration(stmt)
             

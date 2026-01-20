@@ -114,10 +114,13 @@ class RCRuntime:
 class Value:
     """Base value for CBLang. Contains a Type and LLVM Value."""
 
-    def __init__(self, builder: ir.IRBuilder, val_type: Type, initial_value: ir.Value) -> None:
+    def __init__(self, builder: ir.IRBuilder, val_type: Type, initial_value: ir.Value, allocate=False) -> None:
         self.val_type = val_type
-        self.value_ptr = builder.alloca(self.val_type.llvm_type, name="value_ptr")
-        builder.store(initial_value, self.value_ptr)
+        if allocate:
+            self.value_ptr = builder.alloca(self.val_type.llvm_type, name="value_ptr")
+            builder.store(initial_value, self.value_ptr)
+        else:
+            self.value_ptr = initial_value
     
     def load_value(self, builder: ir.IRBuilder) -> ir.Value:
         return builder.load(self.value_ptr, "load_value")

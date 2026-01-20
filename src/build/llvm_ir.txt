@@ -91,7 +91,7 @@ entry:
   ret %"TestClass"* %"this_ptr"
 }
 
-define i32 @"main__test__TestClass__num2"()
+define i32 @"main__test__TestClass__num2"(%"TestClass"* %".1")
 {
 entry:
   %"load_value" = load i32, i32* %"value_ptr"
