@@ -12,7 +12,8 @@ scope num -> int = {
 }
 
 scope main = {
-    string str = "Hello World!";
+    string str = "Hello World!\n";
     print(str);
     int x = num();
+    print(1);
 }

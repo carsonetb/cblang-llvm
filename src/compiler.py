@@ -13,6 +13,9 @@ def compile_error(token: Token, msg: str) -> RuntimeError:
     print(f"@Compiler [line {token.line}] [token {token.raw}] [ERROR] {msg}")
     return RuntimeError()
 
+def compile_warning(token: Token, msg: str) -> None:
+    print(f"@Compiler [line {token.line}] [token {token.raw}] [WARNING] {msg}")
+
 class Compiler:
     def __init__(self, program: Program, module_name: str, filename: str, package: str) -> None:
         llvm.initialize_native_target()
@@ -117,21 +120,49 @@ class Compiler:
     
     def gen_function_call(self, expr: CallExpr, on: Value | None = None) -> Value | VoidValue:
         # TODO: Validate arguments.
+
+        if on is not None:
+            try:
+                field = on.val_type.get_field(expr.callee.raw)
+                assert isinstance(field, ValueField)
+            except KeyError:
+                raise compile_error(expr.callee, f"Type {on.val_type.name} has no member function {expr.callee}.")
+        else:
+            field = self.get_field(expr.callee)
+
+        if not isinstance(field.value, FunctionValue) or not isinstance(field.val_type, FunctionType):
+            raise compile_error(expr.callee, f"Cannot call '{expr.callee}' because it is not a function.")
+        
+        arg_types = field.val_type.args
+
+        if len(expr.args) != len(arg_types):
+            raise compile_error(expr.callee, f"Number of arguments passed ({len(expr.args)}) is different than the number expected ({len(arg_types)})")
+
         args = []
-        for arg_expr in expr.args:
+        for i, arg_expr in enumerate(expr.args):
+            expected_type = arg_types[i]
             arg_val = self.gen_expression(arg_expr)
+            assert not isinstance(arg_val, VoidValue)
+
+            if expected_type.castable_from(arg_val.val_type):
+                if arg_val.val_type.needs_refcount:
+                    compile_warning(expr.callee, f"For argument {i}, argument will be casted from type '{arg_val.val_type.name} to '{expected_type.name}', meaning a copy of the variable, not a reference, will be created.")
+                arg_val = expected_type.generate_from(self.builder, arg_val, self.rc_runtime, self.c_runtime, self.target_data)
+
+            if arg_val.val_type.name != expected_type.name:
+                raise compile_error(expr.callee, f"For argument {i}, cannot pass variable of type '{arg_val.val_type.name}' to parameter of type '{expected_type.name}', and it cannot be casted.")
+
             if isinstance(arg_val, RCValue):
                 arg_val.retain(self.builder, self.rc_runtime)
             args.append(arg_val)
+        
         if not on:
-            field = self.get_field(expr.callee)
-            if not isinstance(field.value, FunctionValue):
-                raise compile_error(expr.callee, f"Cannot call '{expr.callee}' because it is not a function.")
             if field.value.is_this_member:
                 assert self.inside_ptr is not None
                 converted = [self.inside_ptr] + [arg.load_value(self.builder) for arg in args]
                 return field.value.call_this_basic(self.builder, converted, self.rc_runtime, self.target_data)
             return field.value.call_this(self.builder, args, self.rc_runtime, self.target_data)
+
         try:
             return on.call(self.builder, expr.callee.raw, args, self.rc_runtime, self.target_data)
         except KeyError:
@@ -359,6 +390,7 @@ class Compiler:
         assert not isinstance(expr_value, VoidValue)
 
         if var_type.castable_from(expr_value.val_type):
+            compile_warning(var_name, f"Expression will be casted from '{expr_value.val_type.name} to '{var_type.name}', meaning a copy of the variable will be created.")
             expr_value = var_type.generate_from(self.builder, expr_value, self.rc_runtime, self.c_runtime, self.target_data)
         
         if expr_value.val_type.name != var_type.name:

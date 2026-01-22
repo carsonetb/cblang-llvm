@@ -239,15 +239,27 @@ class Scanner:
 
                 self.add_token(TokenType.CHARACTER, char)
             case '"':
+                string = ""
                 while not self.is_at_end() and self.peek() != '"':
-                    self.advance()
+                    if self.match("\\"):
+                        if self.match("\\"):
+                            string += "\\"
+                        elif self.match("n"): # Down the rabbit hole...
+                            string += "\n"
+                        elif self.match("t"):
+                            string += "\t"
+                        else:
+                            self.error("Unsupported escape sequence.")
+                        continue
+
+                    string += self.advance()
 
                 if self.is_at_end():
                     self.error("Unterminated string.")
                     return
 
                 self.advance()
-                self.add_token(TokenType.STRING, self.get_token_raw()[1:-1])
+                self.add_token(TokenType.STRING, string)
             case _:
                 if character.isalpha() or character == "_":
                     self.identifier()

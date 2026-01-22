@@ -24,8 +24,10 @@
         "reloc",
         "rtype",
         "sdiv",
+        "sprintf",
         "srem",
         "stdlib",
+        "uncasted",
         "venv"
     ]
 }

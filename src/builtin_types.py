@@ -724,11 +724,11 @@ class StringType(Type):
         constant_type = ir.ArrayType(I8, len(b_string))
         fmt_constant = constant_type(b_string)
         constant_mem = builder.alloca(constant_type, name="fmt_const_mem")
+        constant_ptr = builder.bitcast(constant_mem, I8_POINTER, "fmt_constant_ptr")
         builder.store(fmt_constant, constant_mem)
-        out_mem = builder.call(c_runtime.malloc, [I32(48)], "out_mem") # Max size of a float with %d
-        out: ir.CastInstr = builder.bitcast(out_mem, I8_POINTER) # type: ignore
-        builder.call(c_runtime.sprintf_func, [out_mem, constant_mem, val])
-        return RCValue(builder, self, out, rc_runtime, target_data, allocate=False)
+        out_mem = builder.call(rc_runtime.rc_alloc_func, [I32(48)], "out_mem") # Max size of a float with %d
+        builder.call(c_runtime.sprintf_func, [out_mem, constant_ptr, val])
+        return RCValue(builder, self, out_mem, rc_runtime, target_data)
     
     def get_destructor(self) -> ir.Function | None:
         return self.destructor_func
