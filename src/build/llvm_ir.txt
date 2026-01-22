@@ -139,14 +139,15 @@ entry:
   %"num" = call i32 @"main__test__num"()
   %"value_ptr.2" = alloca i32
   store i32 %"num", i32* %"value_ptr.2"
-  %"value_ptr.3" = alloca i32
-  store i32 1, i32* %"value_ptr.3"
-  %"load_value.1" = load i32, i32* %"value_ptr.3"
+  %"value_ptr.3" = alloca float
+  store float 0x3fe0000000000000, float* %"value_ptr.3"
+  %"load_value.1" = load float, float* %"value_ptr.3"
+  %"as_double" = fpext float %"load_value.1" to double
   %"fmt_const_mem" = alloca [3 x i8]
   %"fmt_constant_ptr" = bitcast [3 x i8]* %"fmt_const_mem" to i8*
-  store [3 x i8] c"%d\00", [3 x i8]* %"fmt_const_mem"
-  %"out_mem" = call i8* @"rc_alloc"(i32 48)
-  call void (i8*, i8*, ...) @"sprintf"(i8* %"out_mem", i8* %"fmt_constant_ptr", i32 %"load_value.1")
+  store [3 x i8] c"%f\00", [3 x i8]* %"fmt_const_mem"
+  %"out_mem" = call i8* @"malloc"(i32 48)
+  call void (i8*, i8*, ...) @"sprintf"(i8* %"out_mem", i8* %"fmt_constant_ptr", double %"as_double")
   %"value_memory.1" = call i8* @"rc_alloc"(i32 8)
   %"value_ptr.4" = bitcast i8* %"value_memory.1" to i8**
   store i8* %"out_mem", i8** %"value_ptr.4"

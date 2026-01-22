@@ -6,7 +6,7 @@ from typing import Container, cast
 from llvmlite import ir
 import llvmlite.binding as llvm
 
-from llvm_types import FLOAT, I32, I8, I8_POINTER, VOID
+from llvm_types import DOUBLE, FLOAT, I1, I32, I8, I8_POINTER, VOID
 import llvm_types
 from parser import MemberFlag, FunctionFlag
 from util import Singleton
@@ -720,15 +720,43 @@ class StringType(Type):
     def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
         assert self.castable_from(cast_from.val_type)
         val = cast_from.load_value(builder)
-        b_string = bytearray("%d\0".encode("utf-8"))
-        constant_type = ir.ArrayType(I8, len(b_string))
-        fmt_constant = constant_type(b_string)
-        constant_mem = builder.alloca(constant_type, name="fmt_const_mem")
-        constant_ptr = builder.bitcast(constant_mem, I8_POINTER, "fmt_constant_ptr")
-        builder.store(fmt_constant, constant_mem)
-        out_mem = builder.call(rc_runtime.rc_alloc_func, [I32(48)], "out_mem") # Max size of a float with %d
-        builder.call(c_runtime.sprintf_func, [out_mem, constant_ptr, val])
-        return RCValue(builder, self, out_mem, rc_runtime, target_data)
+        if isinstance(cast_from.val_type, (IntType, FloatType)):
+            if isinstance(cast_from.val_type, FloatType):
+                val = builder.fpext(val, DOUBLE, "as_double")
+            b_string = bytearray("%d\0".encode("utf-8")) if isinstance(cast_from.val_type, IntType) else bytearray("%f\0".encode("utf-8"))
+            constant_type = ir.ArrayType(I8, len(b_string))
+            fmt_constant = constant_type(b_string)
+            constant_mem = builder.alloca(constant_type, name="fmt_const_mem")
+            constant_ptr = builder.bitcast(constant_mem, I8_POINTER, "fmt_constant_ptr")
+            builder.store(fmt_constant, constant_mem)
+            out_mem = builder.call(c_runtime.malloc, [I32(48)], "out_mem") # Max size of a float with %d
+            builder.call(c_runtime.sprintf_func, [out_mem, constant_ptr, val])
+            return RCValue(builder, self, out_mem, rc_runtime, target_data)
+        elif isinstance(cast_from.val_type, BoolType):
+            truthy_block = builder.append_basic_block("truthy")
+            falsey_block = builder.append_basic_block("falsey")
+            continued_block = builder.append_basic_block("continue")
+            
+            is_true = builder.icmp_unsigned("==", val, I1(1), "is_true")
+            mem_type = ir.ArrayType(I8, 6)
+            out_mem = builder.alloca(mem_type, name="out_mem")
+            out_ptr: ir.CastInstr = builder.bitcast(out_mem, I8_POINTER, "out_ptr") # type: ignore
+            builder.cbranch(is_true, truthy_block, falsey_block)
+
+            builder.position_at_start(truthy_block)
+            true_str_bytes = bytearray("true\0\0".encode("utf-8"))
+            builder.store(mem_type(true_str_bytes), out_mem)
+            builder.branch(continued_block)
+
+            builder.position_at_start(falsey_block)
+            false_str_bytes = bytearray("false\0".encode("utf-8"))
+            builder.store(mem_type(false_str_bytes), out_mem)
+            builder.branch(continued_block)
+
+            builder.position_at_start(continued_block)
+            return RCValue(builder, self, out_ptr, rc_runtime, target_data)
+        else:
+            assert False
     
     def get_destructor(self) -> ir.Function | None:
         return self.destructor_func

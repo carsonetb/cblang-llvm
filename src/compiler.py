@@ -462,7 +462,7 @@ class Compiler:
                     raise compile_error(generate.name, f"Function does not always return type '{generate.returns.raw}' but instead type '{possible_ret.val_type.name}'")
                 break
         
-        if not block.is_terminated:
+        if not self.builder.block.is_terminated: # type: ignore
             self.pop_scope()
             self.builder.ret_void()
         else:
