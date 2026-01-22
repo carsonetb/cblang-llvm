@@ -6,7 +6,8 @@ from typing import Container, cast
 from llvmlite import ir
 import llvmlite.binding as llvm
 
-from llvm_types import I32, I8, I8_POINTER, VOID
+from llvm_types import FLOAT, I32, I8, I8_POINTER, VOID
+import llvm_types
 from parser import MemberFlag, FunctionFlag
 from util import Singleton
 
@@ -30,6 +31,10 @@ class CRuntime:
         # int32 printf(char* str, ...)
         self.printf_type = ir.FunctionType(I32, [I8_POINTER], True)
         self.printf_func = ir.Function(self.module, self.printf_type, name="printf")
+
+        # void sprintf(char* str, char* format, ...)
+        self.sprintf_type = ir.FunctionType(VOID, [I8_POINTER, I8_POINTER], True)
+        self.sprintf_func = ir.Function(self.module, self.sprintf_type, "sprintf")
 
 class RCRuntime:
     HEADER_SIZE = 4 # bytes
@@ -262,6 +267,12 @@ class Type(ABC):
     @abstractmethod 
     def has_field(self, name: str) -> bool: pass
 
+    def castable_from(self, cast_from: Type) -> bool: 
+        return False
+
+    def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
+        raise RuntimeError("This type cannot be casted!")
+
     def get_destructor(self) -> ir.Function | None:
         return None
     
@@ -413,6 +424,12 @@ class InternalType(Type):
     
     def has_field(self, name: str) -> bool:
         return self.internal_type.has_field(name)
+    
+    def castable_from(self, cast_from: Type) -> bool: 
+        return self.internal_type.castable_from(cast_from)
+    
+    def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
+        return self.internal_type.generate_from(builder, cast_from, rc_runtime, c_runtime, target_data)
 
 
 # TODO: Could be a singleton later?
@@ -467,6 +484,22 @@ class BoolType(Type):
     def has_field(self, name: str) -> bool:
         return False
     
+    def castable_from(self, cast_from: Type) -> bool:
+        return isinstance(cast_from, (IntType, FloatType, StringType, CharType, StringType))
+    
+    def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
+        assert self.castable_from(cast_from.val_type)
+        val = cast_from.load_value(builder)
+        if isinstance(cast_from.val_type, (IntType, CharType)):
+            as_bool: ir.Instruction = builder.not_(builder.icmp_unsigned("==", val, I32(0), "is_zero"), "as_bool") # type: ignore
+        elif isinstance(cast_from.val_type, FloatType):
+            as_bool: ir.Instruction = builder.not_(builder.fcmp_ordered("==", val, FLOAT(0), "is_zero"), "as_bool") # type: ignore
+        elif isinstance(cast_from.val_type, StringType):
+            pass
+        else:
+            assert False
+        return Value(builder, self, as_bool) # type: ignore
+    
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
         if name == "==" or name == "!=":
             out_ir = builder.icmp_unsigned(name, this.load_value(builder), args[0].load_value(builder), "arith_res")
@@ -501,6 +534,15 @@ class IntType(Type):
     
     def has_field(self, name: str) -> bool:
         return False
+    
+    def castable_from(self, cast_from: Type) -> bool:
+        return isinstance(cast_from, (CharType, BoolType))
+    
+    def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
+        assert self.castable_from(cast_from.val_type)
+        val = cast_from.load_value(builder)
+        out_ir: ir.CastInstr = builder.zext(val, self.llvm_type, "as_int32") # type: ignore
+        return Value(builder, self, out_ir)
     
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
         lhs = this.load_value(builder)
@@ -548,6 +590,15 @@ class FloatType(Type):
     
     def has_field(self, name: str) -> bool:
         return False
+    
+    def castable_from(self, cast_from: Type) -> bool:
+        return isinstance(cast_from, (IntType, BoolType))
+    
+    def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
+        assert self.castable_from(cast_from.val_type)
+        val = cast_from.load_value(builder)
+        as_float: ir.CastInstr = builder.sitofp(val, self.llvm_type, "as_float") # type: ignore
+        return Value(builder, self, as_float)
     
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
         lhs = this.load_value(builder)
@@ -599,6 +650,15 @@ class CharType(Type):
     
     def has_field(self, name: str) -> bool:
         return False
+    
+    def castable_from(self, cast_from: Type) -> bool:
+        return isinstance(cast_from, (IntType))
+    
+    def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
+        assert self.castable_from(cast_from.val_type)
+        val = cast_from.load_value(builder)
+        as_char: ir.CastInstr = builder.trunc(val, self.llvm_type, "as_char") # type: ignore
+        return Value(builder, self, as_char)
     
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
         lhs = this.load_value(builder)
@@ -653,6 +713,22 @@ class StringType(Type):
     
     def has_field(self, name: str) -> bool:
         return False
+    
+    def castable_from(self, cast_from: Type) -> bool:
+        return isinstance(cast_from, (IntType, FloatType, BoolType))
+    
+    def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
+        assert self.castable_from(cast_from.val_type)
+        val = cast_from.load_value(builder)
+        b_string = bytearray("%d\0".encode("utf-8"))
+        constant_type = ir.ArrayType(I8, len(b_string))
+        fmt_constant = constant_type(b_string)
+        constant_mem = builder.alloca(constant_type, name="fmt_const_mem")
+        builder.store(fmt_constant, constant_mem)
+        out_mem = builder.call(c_runtime.malloc, [I32(48)], "out_mem") # Max size of a float with %d
+        out: ir.CastInstr = builder.bitcast(out_mem, I8_POINTER) # type: ignore
+        builder.call(c_runtime.sprintf_func, [out_mem, constant_mem, val])
+        return RCValue(builder, self, out, rc_runtime, target_data, allocate=False)
     
     def get_destructor(self) -> ir.Function | None:
         return self.destructor_func

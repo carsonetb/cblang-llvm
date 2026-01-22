@@ -357,7 +357,10 @@ class Compiler:
         var_type = self.get_type(generate.type_name[0])
         expr_value = self.gen_expression(generate.value)
         assert not isinstance(expr_value, VoidValue)
-        # TODO: Check casting
+
+        if var_type.castable_from(expr_value.val_type):
+            expr_value = var_type.generate_from(self.builder, expr_value, self.rc_runtime, self.c_runtime, self.target_data)
+        
         if expr_value.val_type.name != var_type.name:
             raise compile_error(generate.type_name[0], f"Cannot assign '{expr_value.val_type.name}' to '{var_type.name}'")
     
