@@ -20,5 +20,5 @@ scope fibonacci(int n) -> int = {
 }
 
 scope main = {
-    fibonacci(1000000000);
+    fibonacci(110000);
 }
