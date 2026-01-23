@@ -43,7 +43,7 @@ class Compiler:
         self.scoped_variables: list[dict[str, ValueField]] = [{
             "print": self.get_printf()
         }] # Start with the global scope.
-        self.inside_ptr: ir.Value | None = None # The class passed to the function currenlty being processed.
+        self.inside_ptr: ir.Value | None = None # The class passed to the function currently being processed.
     
     @property
     def scope(self) -> dict[str, ValueField]:
@@ -94,7 +94,7 @@ class Compiler:
         mem = self.builder.call(self.c_runtime.malloc, [I32(len(b_string))], "mem")
         alloced_array = self.builder.bitcast(mem, constant_type.as_pointer(), "alloced_array")
         self.builder.store(constant, alloced_array)
-        return RCValue(self.builder, self.type_db["string"], mem, self.rc_runtime, self.target_data)
+        return RCValue(self.builder, self.type_db["string"], mem, self.rc_runtime, self.target_data, "string_literal")
     
     def pop_scope(self) -> dict[str, ValueField]:
         scope = self.scoped_variables.pop()
@@ -116,7 +116,7 @@ class Compiler:
                 ret_type = CharType(self.module)
             case LiteralType.STRING:
                 return self.gen_string_literal(cast(str, lit.val))
-        return Value(self.builder, ret_type, ir.Constant(ret_type.llvm_type, lit.val))
+        return Value(self.builder, ret_type, ir.Constant(ret_type.llvm_type, lit.val), "generated_literal")
     
     def gen_function_call(self, expr: CallExpr, on: Value | None = None) -> Value | VoidValue:
         # TODO: Validate arguments.
@@ -265,13 +265,6 @@ class Compiler:
             possible_ret = self.gen_statement(stmt)
             if not possible_ret is None:
                 return possible_ret
-    
-    def gen_var_declaration(self, stmt: VarDecl) -> None:
-        var_type = self.get_type(stmt.type_name[0])
-        name = stmt.type_name[1]
-        value = self.gen_expression(stmt.value)
-        assert not isinstance(value, VoidValue)
-        self.add_field(name, ValueField(var_type, value, stmt.flags))
 
     def gen_assignment(self, stmt: AssignmentStmt) -> None:
         target = self.gen_accessible(stmt.target)
@@ -298,14 +291,13 @@ class Compiler:
 
         truthy_block = self.builder.append_basic_block("truthy")
         falsey_block = self.builder.append_basic_block("falsey")
-        continued_block = self.builder.append_basic_block()
+        continued_block = self.builder.append_basic_block("continue")
         self.builder.cbranch(branching_res, truthy_block, falsey_block)
 
         self.builder.position_at_start(truthy_block)
         returns = self.gen_scope(stmt.body)
-        self.builder.branch(continued_block)
-
-        # TODO: Check return type is correct.
+        if returns is None:
+            self.builder.branch(continued_block)
 
         self.builder.position_at_start(falsey_block)
         if stmt.else_branch:
@@ -313,6 +305,8 @@ class Compiler:
                 returns = self.gen_if(stmt.else_branch) if returns else None
             if isinstance(stmt.else_branch, ElseStmt):
                 returns = self.gen_else(stmt.else_branch) if returns else None
+        else:
+            returns = None # This if statement doesn't DEFINITELY return because it doesn't have an else case.
         
         if returns is None:
             # Either branch from falsey_block to continued_block, or, if 
@@ -330,8 +324,32 @@ class Compiler:
     def gen_for(self, stmt: ForStmt) -> Value | None:
         pass
     
-    def gen_while(self, stmt: WhileStmt) -> Value | None:
-        pass
+    def gen_while(self, stmt: WhileStmt) -> Value | VoidValue | None:
+        cond_block = self.builder.append_basic_block("while_cond")
+        loop_block = self.builder.append_basic_block("while_loop")
+        continued_block = self.builder.append_basic_block("continue")
+
+        self.builder.branch(cond_block)
+        self.builder.position_at_start(cond_block)
+
+        branching_val = self.gen_expression(stmt.condition)
+        assert not isinstance(branching_val, VoidValue)
+
+        if branching_val.val_type.name != "bool":
+            raise compile_error(stmt.keyword_tok, "The condition in a while statement must evaluate to type 'bool'.")
+        branching_res = self.builder.icmp_unsigned("==", branching_val.load_value(self.builder), I1(1), "branching_res")
+
+        self.builder.cbranch(branching_res, loop_block, continued_block)
+
+        self.builder.position_at_start(loop_block)
+        returns = self.gen_scope(stmt.body)
+        if returns is None:
+            self.builder.branch(cond_block)
+        else:
+            compile_warning(stmt.keyword_tok, "The while block always returns, consider using an if statement instead.")
+        
+        self.builder.position_at_start(continued_block)
+        return returns
 
     def gen_return(self, stmt: ReturnStmt) -> Value | VoidValue:
         ret_val = self.gen_expression(stmt.value) if stmt.value else VoidValue()
@@ -353,7 +371,8 @@ class Compiler:
         if isinstance(stmt, ScopeStmt):
             return self.gen_scope(stmt)
         if isinstance(stmt, VarDecl):
-            return self.gen_var_declaration(stmt)
+            self.gen_variable(stmt)
+            return
         if isinstance(stmt, AssignmentStmt):
             return self.gen_assignment(stmt)
         if isinstance(stmt, IfStmt):
@@ -379,7 +398,7 @@ class Compiler:
         out: dict[str, Value] = {}
 
         for arg_name, arg_type in types.items():
-            out[arg_name] = Value(self.builder, arg_type, ir.Argument(function, arg_type.llvm_type))
+            out[arg_name] = Value(self.builder, arg_type, ir.Argument(function, arg_type.llvm_type), f"{function.name}_arg_{arg_name}")
 
         return out
     
@@ -397,7 +416,7 @@ class Compiler:
             raise compile_error(generate.type_name[0], f"Cannot assign '{expr_value.val_type.name}' to '{var_type.name}'")
     
         if var_type.needs_refcount:
-            hl_value = RCValue(self.builder, var_type, expr_value.value_ptr, self.rc_runtime, self.target_data)
+            hl_value = RCValue(self.builder, var_type, expr_value.value_ptr, self.rc_runtime, self.target_data, var_name.raw)
         else:
             hl_value = expr_value
         field = ValueField(var_type, hl_value, generate.flags)
@@ -439,17 +458,17 @@ class Compiler:
                 member_addr = self.builder.gep(self.inside_ptr, [I32(0), I32(ind)], name=f"{name}")
                 hl_field = inside.field_names[name]
                 if hl_field.val_type.needs_refcount:
-                    value = RCValue(self.builder, hl_field.val_type, member_addr, self.rc_runtime, self.target_data, allocate=False)
+                    value = RCValue(self.builder, hl_field.val_type, member_addr, self.rc_runtime, self.target_data, f"{inside.name}_member_{name}", allocate=False)
                 elif isinstance(hl_field.val_type, FunctionType):
                     value = FunctionValue(self.builder, hl_field.val_type, hl_field.val_type.function, is_this_member=True)
                 else:
-                    value = Value(self.builder, hl_field.val_type, member_addr, allocate=False)
+                    value = Value(self.builder, hl_field.val_type, member_addr, f"{inside.name}_member_{name}", allocate=False)
                 self.scope[name] = ValueField(hl_field.val_type, value, hl_field.flags)
 
         # Add arguments to scope.
         if not inside or len(function_value.args) > 1:
-            for i, arg in enumerate(function_value.args if inside else function_value.args[1:]):
-                self.scope[arg_types[i][0]] = ValueField(arg_types[i][1], Value(self.builder, arg_types[i][1], arg))
+            for i, arg in enumerate(function_value.args if not inside else function_value.args[1:]):
+                self.scope[arg_types[i][0]] = ValueField(arg_types[i][1], Value(self.builder, arg_types[i][1], arg, f"arg_{arg.name}"))
 
         for stmt in generate.body:
             possible_ret = self.gen_statement(stmt)
@@ -500,7 +519,7 @@ class Compiler:
 
             type_name = generate.args[index]
             arg_type = self.get_type(type_name[0])
-            self.add_field(type_name[1], ValueField(arg_type, Value(self.builder, arg_type, arg)))
+            self.add_field(type_name[1], ValueField(arg_type, Value(self.builder, arg_type, arg, f"member_{arg.name}")))
             member_index += 1
         
         for member in generate.members:
@@ -510,7 +529,7 @@ class Compiler:
             if isinstance(member, Function):
                 self.gen_function_header(member, out)
             if isinstance(member, VarDecl):
-                self.gen_var_declaration(member)
+                self.gen_variable(member)
 
             member_index += 1
 
@@ -532,7 +551,7 @@ class Compiler:
             index = out.field_indices[name]
             generated_member = field.value.load_value(self.builder) if not isinstance(field.value, FunctionValue) else field.value.function
             loaded = self.builder.gep(this_ptr, [I32(0), I32(index)], name="loaded")
-            actual_member_ptr = self.builder.bitcast(loaded, field.val_type.llvm_type.as_pointer(), "actual_member_ptr") # Might be an unecessary bitcast?
+            actual_member_ptr = self.builder.bitcast(loaded, field.val_type.llvm_type.as_pointer(), "actual_member_ptr") # Might be an unnecessary bitcast?
             self.builder.store(generated_member, actual_member_ptr)
 
         self.pop_scope()
@@ -565,7 +584,7 @@ class Compiler:
                 assert isinstance(field.value, FunctionValue)
                 self.gen_function_definition(stmt, field.value.function)
             elif isinstance(stmt, VarDecl):
-                self.gen_var_declaration(stmt)
+                self.gen_variable(stmt)
             
         try:
             main_func = self.get_field(Token.make_external("main"))

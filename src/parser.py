@@ -147,7 +147,7 @@ class Parser:
         return IfStmt(condition, ScopeStmt(body), else_branch, keyword)
     
     def while_stmt(self) -> WhileStmt:
-        self.consume(TokenType.WHILE_KW, "Expected 'while'")
+        keyword = self.consume(TokenType.WHILE_KW, "Expected 'while'")
         self.consume(TokenType.LEFT_PAREN, "Expected '(' after 'while'")
         condition = self.expression()
         self.consume(TokenType.RIGHT_PAREN, "Expected ')' after while condition")
@@ -156,7 +156,7 @@ class Parser:
         body = self.scope_body()
         self.consume(TokenType.RIGHT_CURLY, "Expected '}' after while body")
         
-        return WhileStmt(condition, body)
+        return WhileStmt(condition, ScopeStmt(body), keyword)
     
     def for_stmt(self) -> ForStmt:
         keyword = self.consume(TokenType.FOR_KW, "Expected 'for'")

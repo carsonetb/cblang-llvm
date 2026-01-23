@@ -132,7 +132,8 @@ class ElseStmt(Statement):
 @dataclass
 class WhileStmt(Statement):
     condition: Expression
-    body: list[Statement]
+    body: ScopeStmt
+    keyword_tok: Token
 
 
 @dataclass

@@ -1,19 +1,24 @@
-class TestClass = (
-    int x = 0,
-
-    scope num2 -> int = {
-        return x;
+scope fibonacci(int n) -> int = {
+    if (n == 0) {
+        return 0;
     }
-)
+    if (n == 1) {
+        return 1;
+    }
 
-scope num -> int = {
-    TestClass cls = TestClass();
-    return cls.x;
+    int a = 0;
+    int b = 1;
+    int i = 2;
+    while (i <= n) {
+        int c = a + b;
+        a = b;
+        b = c;
+        i = i + 1;
+    }
+
+    return b;
 }
 
 scope main = {
-    string str = "Hello World!\n";
-    print(str);
-    int x = num();
-    print(1);
+    fibonacci(1000000000);
 }

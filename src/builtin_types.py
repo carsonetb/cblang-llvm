@@ -121,10 +121,12 @@ class Value:
     This value is stack allocated, and copied when referenced (
     besides some specific cases)."""
 
-    def __init__(self, builder: ir.IRBuilder, val_type: Type, initial_value: ir.Value, allocate=True) -> None:
+    def __init__(self, builder: ir.IRBuilder, val_type: Type, initial_value: ir.Value, name: str, allocate=True) -> None:
+        self.name = name
         self.val_type = val_type
         if allocate:
-            self.value_ptr = builder.alloca(self.val_type.llvm_type, name="value_ptr")
+            with builder.goto_block(builder.function.blocks[0]):
+                self.value_ptr = builder.alloca(val_type.llvm_type, name=f"{name}_ptr")
             builder.store(initial_value, self.value_ptr)
         else:
             self.value_ptr = initial_value
@@ -150,10 +152,10 @@ class Value:
         internal_val_mem = builder.gep(self.value_ptr, [zero, idx], name="internal_val_mem")
         internal_val_ptr: ir.CastInstr = builder.bitcast(internal_val_mem, field_type.val_type.llvm_type.as_pointer()) # type: ignore
         if field_type.val_type.needs_refcount:
-            return RCValue(builder, field_type.val_type, internal_val_ptr, rc_runtime, target_data, allocate=False)
+            return RCValue(builder, field_type.val_type, internal_val_ptr, rc_runtime, target_data, f"{self.name}_get_{name}", allocate=False)
         else:
             internal_val = builder.load(internal_val_ptr, "internal_val")
-            return Value(builder, field_type.val_type, internal_val)
+            return Value(builder, field_type.val_type, internal_val, f"{self.name}_get_{name}")
 
     def retain(self, builder: ir.IRBuilder, rc_runtime: RCRuntime) -> None:
         pass
@@ -163,11 +165,12 @@ class Value:
 
 
 class RCValue(Value):
-    def __init__(self, builder: ir.IRBuilder, val_type: Type, initial_value: ir.Value, rc_runtime: RCRuntime, target_data: llvm.TargetData, allocate=True) -> None:
+    def __init__(self, builder: ir.IRBuilder, val_type: Type, initial_value: ir.Value, rc_runtime: RCRuntime, target_data: llvm.TargetData, name: str, allocate=True) -> None:
+        self.name = name
         self.val_type = val_type
         if allocate:
-            value_memory = builder.call(rc_runtime.rc_alloc_func, [I32(ArrayType.get_type_size(target_data, val_type.llvm_type))], "value_memory")
-            self.value_ptr = builder.bitcast(value_memory, val_type.llvm_type.as_pointer(), "value_ptr")
+            value_memory = builder.call(rc_runtime.rc_alloc_func, [I32(ArrayType.get_type_size(target_data, val_type.llvm_type))], f"{name}_memory")
+            self.value_ptr = builder.bitcast(value_memory, val_type.llvm_type.as_pointer(), f"{name}_memory")
             builder.store(initial_value, self.value_ptr)
         else:
             self.value_ptr = initial_value
@@ -204,9 +207,9 @@ class FunctionValue(Value):
             return VoidValue()
 
         if self.function_type.returns.needs_refcount:
-            return RCValue(builder, self.function_type.returns, result, rc_runtime, target_data, allocate=False)
+            return RCValue(builder, self.function_type.returns, result, rc_runtime, target_data, f"{self.function.name}_return", allocate=False)
         else:
-            return Value(builder, self.function_type.returns, result)
+            return Value(builder, self.function_type.returns, result, f"{self.function.name}_return")
 
 
 class VoidValue:
@@ -498,7 +501,7 @@ class BoolType(Type):
             pass
         else:
             assert False
-        return Value(builder, self, as_bool) # type: ignore
+        return Value(builder, self, as_bool, f"{cast_from.val_type.name}_to_bool") # type: ignore
     
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
         if name == "==" or name == "!=":
@@ -507,7 +510,7 @@ class BoolType(Type):
             out_ir: ir.Instruction = builder.not_(this.load_value(builder), "arith_res") # type: ignore
         else:
             raise ValueError(f"Cannot call '{name}' on type '{self.name}'.")
-        return Value(builder, self, out_ir)
+        return Value(builder, self, out_ir, f"bool_comp_res")
 
 
 class IntType(Type):
@@ -542,7 +545,7 @@ class IntType(Type):
         assert self.castable_from(cast_from.val_type)
         val = cast_from.load_value(builder)
         out_ir: ir.CastInstr = builder.zext(val, self.llvm_type, "as_int32") # type: ignore
-        return Value(builder, self, out_ir)
+        return Value(builder, self, out_ir, f"{cast_from.val_type.name}_to_int")
     
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
         lhs = this.load_value(builder)
@@ -563,7 +566,7 @@ class IntType(Type):
             out_ir = builder.neg(lhs, "arith_res")
         else:
             raise ValueError(f"Cannot call '{name}' on type '{self.name}'.")
-        return Value(builder, out_type if out_type else self, out_ir) # type: ignore
+        return Value(builder, out_type if out_type else self, out_ir, "int_comp_res") # type: ignore
 
 
 class FloatType(Type):
@@ -598,7 +601,7 @@ class FloatType(Type):
         assert self.castable_from(cast_from.val_type)
         val = cast_from.load_value(builder)
         as_float: ir.CastInstr = builder.sitofp(val, self.llvm_type, "as_float") # type: ignore
-        return Value(builder, self, as_float)
+        return Value(builder, self, as_float, f"{cast_from.val_type.name}_to_float")
     
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
         lhs = this.load_value(builder)
@@ -623,7 +626,7 @@ class FloatType(Type):
             out_ir = builder.neg(lhs, "arith_res")
         else:
             raise ValueError(f"Cannot call '{name}' on type '{self.name}'.")
-        return Value(builder, out_type, out_ir) # type: ignore
+        return Value(builder, out_type, out_ir, "float_comp_res") # type: ignore
 
 
 class CharType(Type):
@@ -658,7 +661,7 @@ class CharType(Type):
         assert self.castable_from(cast_from.val_type)
         val = cast_from.load_value(builder)
         as_char: ir.CastInstr = builder.trunc(val, self.llvm_type, "as_char") # type: ignore
-        return Value(builder, self, as_char)
+        return Value(builder, self, as_char, f"{cast_from.val_type.name}_to_char")
     
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
         lhs = this.load_value(builder)
@@ -731,7 +734,7 @@ class StringType(Type):
             builder.store(fmt_constant, constant_mem)
             out_mem = builder.call(c_runtime.malloc, [I32(48)], "out_mem") # Max size of a float with %d
             builder.call(c_runtime.sprintf_func, [out_mem, constant_ptr, val])
-            return RCValue(builder, self, out_mem, rc_runtime, target_data)
+            return RCValue(builder, self, out_mem, rc_runtime, target_data, f"{cast_from.val_type.name}_to_string")
         elif isinstance(cast_from.val_type, BoolType):
             truthy_block = builder.append_basic_block("truthy")
             falsey_block = builder.append_basic_block("falsey")
@@ -754,7 +757,7 @@ class StringType(Type):
             builder.branch(continued_block)
 
             builder.position_at_start(continued_block)
-            return RCValue(builder, self, out_ptr, rc_runtime, target_data)
+            return RCValue(builder, self, out_ptr, rc_runtime, target_data,  f"{cast_from.val_type.name}_to_string")
         else:
             assert False
     
@@ -955,12 +958,12 @@ class ArrayType(Type):
         elif name == "append":
             if args[0].val_type.name != self.contains.name:
                 raise ValueError("Invalid type for append call.")
-            return Value(builder, VoidType(self.module), builder.call(self.append, [this.load_value(builder), args[0].load_value(builder)]))
+            return Value(builder, VoidType(self.module), builder.call(self.append, [this.load_value(builder), args[0].load_value(builder)]), "array_append_res")
         else:
             raise ValueError(f"Cannot call '{name}' on type '{self.name}'")
     
     def generate(self, builder: ir.IRBuilder) -> Value:
-        return Value(builder, self, builder.call(self.init_func, [I32(1)], "initial_value"))
+        return Value(builder, self, builder.call(self.init_func, [I32(1)], "initial_value"), "initial_value")
     
     @staticmethod
     def get_struct_val(builder: ir.IRBuilder, struct: ir.Value, index: int, name: str):

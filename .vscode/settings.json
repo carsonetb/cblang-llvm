@@ -3,6 +3,7 @@
     "cSpell.words": [
         "abstractmethod",
         "alloca",
+        "alloced",
         "bitcast",
         "bitcasted",
         "cblang",
@@ -17,6 +18,7 @@
         "fdiv",
         "fmul",
         "fneg",
+        "fpext",
         "fsub",
         "isinstance",
         "llvmlite",
@@ -28,6 +30,7 @@
         "srem",
         "stdlib",
         "uncasted",
-        "venv"
+        "venv",
+        "zext"
     ]
 }

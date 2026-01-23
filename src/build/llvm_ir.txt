@@ -2,7 +2,6 @@
 target triple = "unknown-unknown-unknown"
 target datalayout = ""
 
-%"TestClass" = type {i32, i32 (%"TestClass"*)*}
 declare i8* @"malloc"(i32 %".1")
 
 declare i8* @"realloc"(i8* %".1", i32 %".2")
@@ -74,90 +73,96 @@ entry:
   ret i32 0
 }
 
-define void @"TestClass_destructor"(i8* %".1")
+define i32 @"main__test__fibonacci"(i32 %".1")
 {
 entry:
-  %"self_ptr" = bitcast i8* %".1" to %"TestClass"*
-  ret void
-}
-
-define %"TestClass"* @"main__test__TestClass__init"()
-{
-entry:
-  %"size_ptr" = getelementptr %"TestClass", %"TestClass"* null, i32 1
-  %"size" = ptrtoint %"TestClass"* %"size_ptr" to i32
-  %"raw_ptr" = call i8* @"rc_alloc"(i32 %"size")
-  %"this_ptr" = bitcast i8* %"raw_ptr" to %"TestClass"*
-  %"value_ptr" = alloca i32
-  store i32 0, i32* %"value_ptr"
-  %"load_value" = load i32, i32* %"value_ptr"
-  %"loaded" = getelementptr %"TestClass", %"TestClass"* %"this_ptr", i32 0, i32 0
-  store i32 %"load_value", i32* %"loaded"
-  %"loaded.1" = getelementptr %"TestClass", %"TestClass"* %"this_ptr", i32 0, i32 1
-  store i32 (%"TestClass"*)* @"main__test__TestClass__num2", i32 (%"TestClass"*)** %"loaded.1"
-  ret %"TestClass"* %"this_ptr"
-}
-
-define i32 @"main__test__TestClass__num2"(%"TestClass"* %".1")
-{
-entry:
-  %"x" = getelementptr %"TestClass", %"TestClass"* %".1", i32 0, i32 0
-  %"num2" = getelementptr %"TestClass", %"TestClass"* %".1", i32 0, i32 1
-  %"load_value" = load i32, i32* %"x"
-  ret i32 %"load_value"
-}
-
-define i32 @"main__test__num"()
-{
-entry:
-  %"TestClass" = call %"TestClass"* @"main__test__TestClass__init"()
-  %"internal_val_mem" = getelementptr %"TestClass", %"TestClass"* %"TestClass", i32 0, i32 0
-  %"internal_val" = load i32, i32* %"internal_val_mem"
-  %"value_ptr" = alloca i32
-  store i32 %"internal_val", i32* %"value_ptr"
-  %"raw_ptr" = bitcast %"TestClass"* %"TestClass" to i8*
-  call void @"rc_release"(i8* %"raw_ptr", void (i8*)* @"TestClass_destructor")
-  %"load_value" = load i32, i32* %"value_ptr"
-  ret i32 %"load_value"
+  %"arg_.1_ptr" = alloca i32
+  store i32 %".1", i32* %"arg_.1_ptr"
+  %"generated_literal_ptr" = alloca i32
+  store i32 0, i32* %"generated_literal_ptr"
+  %"load_value" = load i32, i32* %"arg_.1_ptr"
+  %"load_value.1" = load i32, i32* %"generated_literal_ptr"
+  %"arith_res" = icmp eq i32 %"load_value", %"load_value.1"
+  %"int_comp_res_ptr" = alloca i1
+  store i1 %"arith_res", i1* %"int_comp_res_ptr"
+  %"load_value.2" = load i1, i1* %"int_comp_res_ptr"
+  %"branching_res" = icmp eq i1 %"load_value.2", 1
+  %"generated_literal_ptr.1" = alloca i32
+  %"generated_literal_ptr.2" = alloca i32
+  %"int_comp_res_ptr.1" = alloca i1
+  %"generated_literal_ptr.3" = alloca i32
+  %"generated_literal_ptr.4" = alloca i32
+  %"generated_literal_ptr.5" = alloca i32
+  %"generated_literal_ptr.6" = alloca i32
+  %"int_comp_res_ptr.2" = alloca i1
+  %"int_comp_res_ptr.3" = alloca i32
+  %"generated_literal_ptr.7" = alloca i32
+  %"int_comp_res_ptr.4" = alloca i32
+  br i1 %"branching_res", label %"truthy", label %"falsey"
+truthy:
+  store i32 0, i32* %"generated_literal_ptr.1"
+  %"load_value.3" = load i32, i32* %"generated_literal_ptr.1"
+  ret i32 %"load_value.3"
+falsey:
+  br label %"continue"
+continue:
+  store i32 1, i32* %"generated_literal_ptr.2"
+  %"load_value.4" = load i32, i32* %"arg_.1_ptr"
+  %"load_value.5" = load i32, i32* %"generated_literal_ptr.2"
+  %"arith_res.1" = icmp eq i32 %"load_value.4", %"load_value.5"
+  store i1 %"arith_res.1", i1* %"int_comp_res_ptr.1"
+  %"load_value.6" = load i1, i1* %"int_comp_res_ptr.1"
+  %"branching_res.1" = icmp eq i1 %"load_value.6", 1
+  br i1 %"branching_res.1", label %"truthy.1", label %"falsey.1"
+truthy.1:
+  store i32 1, i32* %"generated_literal_ptr.3"
+  %"load_value.7" = load i32, i32* %"generated_literal_ptr.3"
+  ret i32 %"load_value.7"
+falsey.1:
+  br label %"continue.1"
+continue.1:
+  store i32 0, i32* %"generated_literal_ptr.4"
+  store i32 1, i32* %"generated_literal_ptr.5"
+  store i32 2, i32* %"generated_literal_ptr.6"
+  br label %"while_cond"
+while_cond:
+  %"load_value.8" = load i32, i32* %"generated_literal_ptr.6"
+  %"load_value.9" = load i32, i32* %"arg_.1_ptr"
+  %"arith_res.2" = icmp ule i32 %"load_value.8", %"load_value.9"
+  store i1 %"arith_res.2", i1* %"int_comp_res_ptr.2"
+  %"load_value.10" = load i1, i1* %"int_comp_res_ptr.2"
+  %"branching_res.2" = icmp eq i1 %"load_value.10", 1
+  br i1 %"branching_res.2", label %"while_loop", label %"continue.2"
+while_loop:
+  %"load_value.11" = load i32, i32* %"generated_literal_ptr.4"
+  %"load_value.12" = load i32, i32* %"generated_literal_ptr.5"
+  %"arith_res.3" = add i32 %"load_value.11", %"load_value.12"
+  store i32 %"arith_res.3", i32* %"int_comp_res_ptr.3"
+  %"load_value.13" = load i32, i32* %"generated_literal_ptr.5"
+  store i32 %"load_value.13", i32* %"generated_literal_ptr.4"
+  %"load_value.14" = load i32, i32* %"int_comp_res_ptr.3"
+  store i32 %"load_value.14", i32* %"generated_literal_ptr.5"
+  store i32 1, i32* %"generated_literal_ptr.7"
+  %"load_value.15" = load i32, i32* %"generated_literal_ptr.6"
+  %"load_value.16" = load i32, i32* %"generated_literal_ptr.7"
+  %"arith_res.4" = add i32 %"load_value.15", %"load_value.16"
+  store i32 %"arith_res.4", i32* %"int_comp_res_ptr.4"
+  %"load_value.17" = load i32, i32* %"int_comp_res_ptr.4"
+  store i32 %"load_value.17", i32* %"generated_literal_ptr.6"
+  br label %"while_cond"
+continue.2:
+  %"load_value.18" = load i32, i32* %"generated_literal_ptr.5"
+  ret i32 %"load_value.18"
 }
 
 define void @"main__test__main"()
 {
 entry:
-  %"mem" = call i8* @"malloc"(i32 14)
-  %"alloced_array" = bitcast i8* %"mem" to [14 x i8]*
-  store [14 x i8] c"Hello World!\0a\00", [14 x i8]* %"alloced_array"
-  %"value_memory" = call i8* @"rc_alloc"(i32 8)
-  %"value_ptr" = bitcast i8* %"value_memory" to i8**
-  store i8* %"mem", i8** %"value_ptr"
-  %"raw_ptr" = bitcast i8** %"value_ptr" to i8*
-  call void @"rc_retain"(i8* %"raw_ptr")
-  %"load_value" = load i8*, i8** %"value_ptr"
-  %"printf" = call i32 (i8*, ...) @"printf"(i8* %"load_value")
-  %"value_ptr.1" = alloca i32
-  store i32 %"printf", i32* %"value_ptr.1"
-  %"num" = call i32 @"main__test__num"()
-  %"value_ptr.2" = alloca i32
-  store i32 %"num", i32* %"value_ptr.2"
-  %"value_ptr.3" = alloca float
-  store float 0x3fe0000000000000, float* %"value_ptr.3"
-  %"load_value.1" = load float, float* %"value_ptr.3"
-  %"as_double" = fpext float %"load_value.1" to double
-  %"fmt_const_mem" = alloca [3 x i8]
-  %"fmt_constant_ptr" = bitcast [3 x i8]* %"fmt_const_mem" to i8*
-  store [3 x i8] c"%f\00", [3 x i8]* %"fmt_const_mem"
-  %"out_mem" = call i8* @"malloc"(i32 48)
-  call void (i8*, i8*, ...) @"sprintf"(i8* %"out_mem", i8* %"fmt_constant_ptr", double %"as_double")
-  %"value_memory.1" = call i8* @"rc_alloc"(i32 8)
-  %"value_ptr.4" = bitcast i8* %"value_memory.1" to i8**
-  store i8* %"out_mem", i8** %"value_ptr.4"
-  %"raw_ptr.1" = bitcast i8** %"value_ptr.4" to i8*
-  call void @"rc_retain"(i8* %"raw_ptr.1")
-  %"load_value.2" = load i8*, i8** %"value_ptr.4"
-  %"printf.1" = call i32 (i8*, ...) @"printf"(i8* %"load_value.2")
-  %"value_ptr.5" = alloca i32
-  store i32 %"printf.1", i32* %"value_ptr.5"
-  %"raw_ptr.2" = bitcast i8** %"value_ptr" to i8*
-  call void @"rc_release"(i8* %"raw_ptr.2", void (i8*)* @"string_destructor")
+  %"generated_literal_ptr" = alloca i32
+  store i32 1000000000, i32* %"generated_literal_ptr"
+  %"load_value" = load i32, i32* %"generated_literal_ptr"
+  %"fibonacci" = call i32 @"main__test__fibonacci"(i32 %"load_value")
+  %"main__test__fibonacci_return_ptr" = alloca i32
+  store i32 %"fibonacci", i32* %"main__test__fibonacci_return_ptr"
   ret void
 }
