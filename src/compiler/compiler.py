@@ -26,6 +26,8 @@ from runtime.rc_runtime import RCRuntime
 
 
 class Compiler:
+    """Compiler takes a program AST from the parser and generates a binary."""
+
     def __init__(self, program: Program, module_name: str, filename: str, package: str) -> None:
         llvm.initialize_native_target()
         llvm.initialize_native_asmprinter()
