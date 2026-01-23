@@ -7,7 +7,19 @@ import llvmlite.binding as llvm
 from llvm_types import I1, I32, I8, VOID
 from scanner import Token
 from ast_classes import Accessible, BinaryExpr, Grouping, MemberFlag, Program, Class, Function, Statement, VarDecl, Expression, LiteralExpr, CallExpr, LiteralType, UnaryExpr, VariableExpr, ArrayExpr, ScopeStmt, WhileStmt, AssignmentStmt, ElseStmt, ForStmt, IfStmt, ReturnStmt
-from builtin_types import BoolType, CRuntime, CharType, Field, FloatType, IntType, RCRuntime, RCValue, StringType, Type, UserType, FunctionType, Value, FunctionValue, ValueField, VoidType, ArrayType, VoidValue
+from representations.types.base_type import Type
+from representations.types.user_types import UserType, FunctionType
+from representations.types.void_type import VoidType
+from representations.types.bool_type import BoolType
+from representations.types.int_type import IntType
+from representations.types.float_type import FloatType
+from representations.types.char_type import CharType
+from representations.types.string_type import StringType
+from representations.types.array_type import ArrayType
+from representations.value import Value, RCValue, FunctionValue, VoidValue
+from representations.field import Field, ValueField
+from runtime.c_runtime import CRuntime
+from runtime.rc_runtime import RCRuntime
 
 def compile_error(token: Token, msg: str) -> RuntimeError:
     print(f"@Compiler [line {token.line}] [token {token.raw}] [ERROR] {msg}")
