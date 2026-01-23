@@ -1,7 +1,7 @@
 import sys
 from scanner import Scanner
 from parser import Parser
-from compiler import Compiler
+from compiler.compiler import Compiler
 
 
 def main():

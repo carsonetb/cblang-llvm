@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 from llvmlite import ir
 from llvm_types import I32, I8_POINTER
 import llvmlite.binding as llvm
@@ -101,7 +101,7 @@ class FunctionValue(Value):
     def call_this(self, builder: ir.IRBuilder, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
         return self.call_this_basic(builder, [arg.load_value(builder) for arg in args], rc_runtime, target_data)
     
-    def call_this_basic(self, builder: ir.IRBuilder, args: list[ir.Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
+    def call_this_basic(self, builder: ir.IRBuilder, args: Sequence[ir.Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
         # Lazy import to avoid circular dependency
         from representations.types.void_type import VoidType
         

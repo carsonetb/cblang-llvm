@@ -1,9 +1,12 @@
 from __future__ import annotations
+from dataclasses import dataclass
 from os import makedirs
 import os
 from typing import cast
 from llvmlite import ir
 import llvmlite.binding as llvm
+from compiler.compiler_data import CompilerData
+from compiler.compiler_helpers import add_field, compile_error, compile_warning, gen_string_literal, get_field, get_printf, get_sizeof, get_type
 from llvm_types import I1, I32, I8, VOID
 from scanner import Token
 from ast_classes import Accessible, BinaryExpr, Grouping, MemberFlag, Program, Class, Function, Statement, VarDecl, Expression, LiteralExpr, CallExpr, LiteralType, UnaryExpr, VariableExpr, ArrayExpr, ScopeStmt, WhileStmt, AssignmentStmt, ElseStmt, ForStmt, IfStmt, ReturnStmt
@@ -21,95 +24,80 @@ from representations.field import Field, ValueField
 from runtime.c_runtime import CRuntime
 from runtime.rc_runtime import RCRuntime
 
-def compile_error(token: Token, msg: str) -> RuntimeError:
-    print(f"@Compiler [line {token.line}] [token {token.raw}] [ERROR] {msg}")
-    return RuntimeError()
-
-def compile_warning(token: Token, msg: str) -> None:
-    print(f"@Compiler [line {token.line}] [token {token.raw}] [WARNING] {msg}")
 
 class Compiler:
     def __init__(self, program: Program, module_name: str, filename: str, package: str) -> None:
         llvm.initialize_native_target()
         llvm.initialize_native_asmprinter()
-        self.program = program
-        self.target_machine = llvm.Target.from_default_triple().create_target_machine(reloc='pic')
-        self.target_data = self.target_machine.target_data
-        self.module_name = module_name
-        self.module = ir.Module(self.module_name)
-        self.c_runtime = CRuntime(self.module)
-        self.rc_runtime = RCRuntime(self.module, self.c_runtime)
-        self.type_db: dict[str, Type] = {
-            'bool': BoolType(self.module),
-            'int': IntType(self.module),
-            'float': FloatType(self.module),
-            'char': CharType(self.module),
-            'string': StringType(self.module, self.c_runtime),
+        target_machine = llvm.Target.from_default_triple().create_target_machine(reloc='pic')
+        module_name = module_name
+        module = ir.Module(module_name)
+        c_runtime = CRuntime(module)
+        rc_runtime = RCRuntime(module, c_runtime)
+        type_db: dict[str, Type] = {
+            'bool': BoolType(module),
+            'int': IntType(module),
+            'float': FloatType(module),
+            'char': CharType(module),
+            'string': StringType(module, c_runtime),
         }
-        self.path_array = [package, module_name]
+        path_array = [package, module_name]
 
         self.main_func_ty = ir.FunctionType(I32, [])
-        self.main_func = ir.Function(self.module, self.main_func_ty, f"main")
+        self.main_func = ir.Function(module, self.main_func_ty, f"main")
         block = self.main_func.append_basic_block("entry")
-        self.builder_stack = [ir.IRBuilder(block)]
-        self.scoped_variables: list[dict[str, ValueField]] = [{
-            "print": self.get_printf()
+        builder_stack = [ir.IRBuilder(block)]
+        scoped_variables: list[dict[str, ValueField]] = [{
+            "print": get_printf(module, builder_stack[0], type_db, c_runtime)
         }] # Start with the global scope.
-        self.inside_ptr: ir.Value | None = None # The class passed to the function currently being processed.
+        inside_ptr: ir.Value | None = None # The class passed to the function currently being processed.
+        self.data = CompilerData(
+            program, target_machine, module_name, module, c_runtime,
+            rc_runtime, type_db, path_array, builder_stack, scoped_variables, inside_ptr
+        )
     
     @property
     def scope(self) -> dict[str, ValueField]:
-        return self.scoped_variables[-1]
+        return self.data.scoped_variables[-1]
     
     @property 
     def builder(self) -> ir.IRBuilder:
-        return self.builder_stack[-1]
+        return self.data.builder_stack[-1]
     
     @property
     def path(self) -> str:
-        return "__".join(self.path_array)
+        return "__".join(self.data.path_array)
     
-    def get_printf(self) -> ValueField:
-        printf_type = FunctionType(self.module, "printf", [self.type_db["string"]], self.type_db["int"], self.c_runtime.printf_func)
-        printf_val = FunctionValue(self.builder, printf_type, self.c_runtime.printf_func)
-        return ValueField(printf_type, printf_val, {MemberFlag.STATIC})
+    @property 
+    def target_data(self) -> llvm.TargetData:
+        return self.data.target_machine.target_data
     
-    def get_type(self, name: Token) -> Type:
-        if not name.raw in self.type_db:
-            raise compile_error(name, f"Class '{name}' not found.")
-        
-        return self.type_db[name.raw]
+    @property 
+    def module(self) -> ir.Module:
+        return self.data.module
     
-    def add_field(self, name: Token, val: ValueField) -> None:
-        if name.raw in self.scope:
-            raise compile_error(name, f"Field '{name}' already exists within the current scope.")
-        
-        self.scope[name.raw] = val
+    @property 
+    def type_db(self) -> dict[str, Type]:
+        return self.data.type_db
     
-    def get_field(self, name: Token) -> ValueField:
-        for scope in reversed(self.scoped_variables):
-            if name.raw in scope.keys():
-                return scope[name.raw]
-        
-        raise compile_error(name, f"Variable/function/class '{name}' doesn't exist within the current scope.")
-
-    def get_sizeof(self, llvm_type: ir.Type) -> ir.Value:
-        null_ptr = ir.Constant(llvm_type.as_pointer(), None)
-        size_ptr = self.builder.gep(null_ptr, [I32(1)], name="size_ptr")
-        size = self.builder.ptrtoint(size_ptr, I32, "size")
-        return size # type: ignore
-
-    def gen_string_literal(self, string: str) -> Value:
-        b_string = bytearray(string.encode("utf8") + b"\0")
-        constant_type = ir.ArrayType(I8, len(b_string))
-        constant = constant_type(b_string)
-        mem = self.builder.call(self.c_runtime.malloc, [I32(len(b_string))], "mem")
-        alloced_array = self.builder.bitcast(mem, constant_type.as_pointer(), "alloced_array")
-        self.builder.store(constant, alloced_array)
-        return RCValue(self.builder, self.type_db["string"], mem, self.rc_runtime, self.target_data, "string_literal")
+    @property 
+    def c_runtime(self) -> CRuntime:
+        return self.data.c_runtime
+    
+    @property 
+    def rc_runtime(self) -> RCRuntime:
+        return self.data.rc_runtime
+    
+    @property 
+    def scoped_variables(self) -> list[dict[str, ValueField]]:
+        return self.data.scoped_variables
+    
+    @property 
+    def builder_stack(self) -> list[ir.IRBuilder]:
+        return self.data.builder_stack
     
     def pop_scope(self) -> dict[str, ValueField]:
-        scope = self.scoped_variables.pop()
+        scope = self.data.scoped_variables.pop()
         for _, field in scope.items():
             if field.value.val_type.needs_refcount:
                 assert isinstance(field.value, RCValue)
@@ -127,7 +115,7 @@ class Compiler:
             case LiteralType.CHAR:
                 ret_type = CharType(self.module)
             case LiteralType.STRING:
-                return self.gen_string_literal(cast(str, lit.val))
+                return gen_string_literal(self.data, cast(str, lit.val))
         return Value(self.builder, ret_type, ir.Constant(ret_type.llvm_type, lit.val), "generated_literal")
     
     def gen_function_call(self, expr: CallExpr, on: Value | None = None) -> Value | VoidValue:
@@ -140,7 +128,7 @@ class Compiler:
             except KeyError:
                 raise compile_error(expr.callee, f"Type {on.val_type.name} has no member function {expr.callee}.")
         else:
-            field = self.get_field(expr.callee)
+            field = get_field(self.data, expr.callee)
 
         if not isinstance(field.value, FunctionValue) or not isinstance(field.val_type, FunctionType):
             raise compile_error(expr.callee, f"Cannot call '{expr.callee}' because it is not a function.")
@@ -184,7 +172,7 @@ class Compiler:
 
     def gen_variable_expr(self, expr: VariableExpr, on: Value | None = None) -> Value:
         if not on:
-            return self.get_field(expr.name).value
+            return get_field(self.data, expr.name).value
         try:
             return on.get(self.builder, expr.name.raw, self.rc_runtime, self.target_data)
         except KeyError:
@@ -402,7 +390,7 @@ class Compiler:
         out: list[tuple[str, Type]] = []
 
         for arg_type_token, name in args:
-            out.append((name.raw, self.get_type(arg_type_token)))
+            out.append((name.raw, get_type(self.data, arg_type_token)))
 
         return out
 
@@ -416,7 +404,7 @@ class Compiler:
     
     def gen_variable(self, generate: VarDecl) -> Field:
         var_name = generate.type_name[1]
-        var_type = self.get_type(generate.type_name[0])
+        var_type = get_type(self.data, generate.type_name[0])
         expr_value = self.gen_expression(generate.value)
         assert not isinstance(expr_value, VoidValue)
 
@@ -433,7 +421,7 @@ class Compiler:
             hl_value = expr_value
         field = ValueField(var_type, hl_value, generate.flags)
         
-        self.add_field(var_name, field)
+        add_field(self.data, var_name, field)
 
         return field
     
@@ -441,7 +429,7 @@ class Compiler:
     def gen_function_header(self, generate: Function, inside: UserType | None = None) -> ValueField:
         arg_types = self.gen_arg_types(generate.args)
         type_list = ([cast(UserType, inside)] if inside else []) + [arg_type for _, arg_type in arg_types]
-        return_type = self.get_type(generate.returns) if generate.returns else VoidType(self.module)
+        return_type = get_type(self.data, generate.returns) if generate.returns else VoidType(self.module)
         args: list[ir.Type] = []
         for arg in type_list:
             args.append(arg.llvm_type.as_pointer() if arg.needs_refcount else arg.llvm_type)
@@ -450,13 +438,13 @@ class Compiler:
         
         function_type = FunctionType( self.module, generate.name.raw, type_list, return_type, function_value)
         function_field = ValueField(function_type, FunctionValue(self.builder, function_type, function_value), generate.member_flags | generate.function_flags)
-        self.add_field(generate.name, function_field)
+        add_field(self.data, generate.name, function_field)
 
         return function_field
 
     def gen_function_definition(self, generate: Function, function_value: ir.Function, inside: UserType | None = None) -> None:
         arg_types = self.gen_arg_types(generate.args)
-        return_type = self.get_type(generate.returns) if generate.returns else VoidType(self.module)
+        return_type = get_type(self.data, generate.returns) if generate.returns else VoidType(self.module)
 
         block = function_value.append_basic_block("entry")
         self.builder_stack.append(ir.IRBuilder(block))
@@ -505,7 +493,7 @@ class Compiler:
 
         # This class' scope.
         self.scoped_variables.append({})
-        self.path_array.append(generate.name.raw)
+        self.data.path_array.append(generate.name.raw)
 
         arg_types = self.gen_arg_types(generate.args)
         type_list = [arg_type for _, arg_type in arg_types]
@@ -517,7 +505,7 @@ class Compiler:
         block = initializer_value.append_basic_block("entry")
         self.builder_stack.append(ir.IRBuilder(block))
         
-        size = self.get_sizeof(out.llvm_type)
+        size = get_sizeof(self.builder, out.llvm_type)
         raw_ptr = self.builder.call(self.rc_runtime.rc_alloc_func, [size], "raw_ptr")
         this_ptr = self.builder.bitcast(raw_ptr, out.llvm_type.as_pointer(), "this_ptr")
 
@@ -530,8 +518,8 @@ class Compiler:
             self.builder.store(arg, field_pointer)
 
             type_name = generate.args[index]
-            arg_type = self.get_type(type_name[0])
-            self.add_field(type_name[1], ValueField(arg_type, Value(self.builder, arg_type, arg, f"member_{arg.name}")))
+            arg_type = get_type(self.data, type_name[0])
+            add_field(self.data, type_name[1], ValueField(arg_type, Value(self.builder, arg_type, arg, f"member_{arg.name}")))
             member_index += 1
         
         for member in generate.members:
@@ -569,7 +557,7 @@ class Compiler:
         self.pop_scope()
         self.builder.ret(this_ptr)
         self.builder_stack.pop()
-        self.path_array.pop()
+        self.data.path_array.pop()
         
         for member in generate.members:
             if isinstance(member, (Class, VarDecl)):
@@ -579,7 +567,7 @@ class Compiler:
             self.gen_function_definition(member, func.value.function, out)
 
         self.type_db[out.name] = out
-        self.add_field(generate.name, initializer_field)
+        add_field(self.data, generate.name, initializer_field)
 
         return out
     
@@ -592,14 +580,14 @@ class Compiler:
                 self.gen_class(stmt)
             elif isinstance(stmt, Function):
                 self.gen_function_header(stmt)
-                field = self.get_field(stmt.name)
+                field = get_field(self.data, stmt.name)
                 assert isinstance(field.value, FunctionValue)
                 self.gen_function_definition(stmt, field.value.function)
             elif isinstance(stmt, VarDecl):
                 self.gen_variable(stmt)
             
         try:
-            main_func = self.get_field(Token.make_external("main"))
+            main_func = get_field(self.data, Token.make_external("main"))
         except RuntimeError:
             print("ERROR: Cannot compile program without a 'main' function.")
             raise RuntimeError()
@@ -622,7 +610,7 @@ class Compiler:
         mod = llvm.parse_assembly(self.module.__str__())
         mod.verify()
 
-        obj_bytes = self.target_machine.emit_object(mod)
+        obj_bytes = self.data.target_machine.emit_object(mod)
         with open(f"{out_directory}/out.o", "wb") as object_file:
             object_file.write(obj_bytes)
         
