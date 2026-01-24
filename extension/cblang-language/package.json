@@ -1,0 +1,25 @@
+{
+  "name": "cblang-language",
+  "displayName": "cblang-language",
+  "description": "CBLang language highlighting support",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.108.1"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "cblang",
+      "aliases": ["CBLang", "cblang"],
+      "extensions": [".cblang"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "cblang",
+      "scopeName": "source.cblang",
+      "path": "./syntaxes/cblang.tmLanguage.json"
+    }]
+  }
+}
