@@ -5,7 +5,7 @@ from ast_classes import FunctionFlag
 from llvm_types import VOID, I8_POINTER, I32
 import llvmlite.binding as llvm
 from representations.types.base_type import Type
-from representations.value import Value
+from representations.value import Value, VoidValue
 from runtime.c_runtime import CRuntime
 from runtime.rc_runtime import RCRuntime
 
@@ -23,7 +23,7 @@ class UserType(Type):
         self.rc_runtime = rc_runtime
         self.field_names: dict[str, Field] = {}
         self.field_indices: dict[str, int] = {}
-        self.casters: dict[str, Field] = {} # Key is the type name.
+        self.casters: list[str] = [] # list of names
 
         self.destructor_type = ir.FunctionType(VOID, [I8_POINTER])
         self.destructor_func = ir.Function(self.module, self.destructor_type, f"{name}_destructor")
@@ -51,7 +51,7 @@ class UserType(Type):
         self.field_indices[name] = len(field_list) - 1
 
         if FunctionFlag.CAST in field.flags:
-            self.casters[name] = field
+            self.casters.append(name)
     
     def finalize(self) -> None:
         field_list = [f.val_type.llvm_type for f in self.field_names.values()]
@@ -68,7 +68,9 @@ class UserType(Type):
     
     def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
         assert self.castable_from(cast_from.val_type)
-        self.call()
+        out = self.call_static(builder, cast_from.val_type.name, [cast_from], rc_runtime, target_data)
+        assert not isinstance(out, VoidValue)
+        return out
     
     def get_destructor(self) -> ir.Function | None:
         if not self.destructor_generated:

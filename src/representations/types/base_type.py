@@ -67,4 +67,8 @@ class Type(ABC):
     def call_static(self, builder: ir.IRBuilder, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
         function_field = self.get_field(name)
 
-        assert isinstance(function_)
+        assert isinstance(function_field.val_type, FunctionType)
+        assert isinstance(function_field, ValueField)
+        func_value = function_field.value
+        assert isinstance(func_value, FunctionValue)
+        return func_value.call_this(builder, args, rc_runtime, target_data)
