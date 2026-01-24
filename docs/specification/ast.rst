@@ -1,11 +1,13 @@
 Language abstract syntax tree 
 =============================
 
-Below is the (rough) `AST <https://en.wikipedia.org/wiki/Abstract_syntax_tree>` 
+Below is the (rough) `AST <https://en.wikipedia.org/wiki/Abstract_syntax_tree>`_
 for the langauge. This is basically what I'm working towards for a full implementation.
 
-    program: 
-        "class" "Main" ( "(" parameters? ")" )? "=" "(" members? ")"
+.. code-block::
+
+    program:
+        importStmt* declaration*
 
     parameters: IDENTIFIER template_definition? IDENTIFIER ( "," IDENTIFIER templates? IDENTIFIER )*
     members: declaration ( "," declaration )*
@@ -34,13 +36,14 @@ for the langauge. This is basically what I'm working towards for a full implemen
 
     scope: statement ( statement )*
 
+    importStmt: "import" IDENTIFIER ( "." IDENTIFIER )* ";"
+
     statement: semicolonStatement | noSemicolonStatement
 
     semicolonStatement:
         ( expression 
         | function_or_variable = expression
         | IDENTIFIER templates? IDENTIFIER = expression
-        | functionDecl 
         | "return" expression? )? ";"
 
     noSemicolonStatement: 

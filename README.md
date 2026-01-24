@@ -88,6 +88,5 @@ two arguments:
 
 ## Documentation
 
-As I get further along with the project, I will put documentation in the `docs`
-folder. Currently it only contains the specification for the language 
-[AST](https://en.wikipedia.org/wiki/Abstract_syntax_tree). 
+Documentation exists in the `docs` folder, which can be generated using 
+[sphinx](https://www.sphinx-doc.org/en/master/index.html).

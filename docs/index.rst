@@ -79,6 +79,9 @@ ordered in terms of importance:
 - Types can define other types they can be casted from
 - Types can define custom operators
 - Fixing the obvious self-referencing problem
+- Abstract classes
+- Class inheritance
+- Internal classes
 
 Usage 
 -----
@@ -100,7 +103,7 @@ see in :doc:`getting_started/index` soon.
 Documentation 
 -------------
 
-As I get furthur along with this project I will put documentation in the `docs`
+As I get further along with this project I will put documentation in the `docs`
 folder. It uses the `sphinx <https://www.sphinx-doc.org/>`_ documentation generator,
 and you are reading documentation generated using it right now.
 
@@ -110,11 +113,14 @@ and you are reading documentation generated using it right now.
    :caption: Getting started
 
    getting_started/index
-   getting_started/test
+   getting_started/installation
 
 .. toctree::
    :hidden:
    :maxdepth: 2
    :caption: Specification
 
+   specification/expressions
+   specification/statements
+   specification/declarations
    specification/ast
