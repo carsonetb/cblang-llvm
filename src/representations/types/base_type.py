@@ -63,3 +63,8 @@ class Type(ABC):
         if not isinstance(func_value, FunctionValue):
             raise ValueError()
         return func_value.call_this(builder, [this] + args, rc_runtime, target_data)
+    
+    def call_static(self, builder: ir.IRBuilder, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
+        function_field = self.get_field(name)
+
+        assert isinstance(function_)

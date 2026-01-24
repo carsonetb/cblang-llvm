@@ -9,7 +9,7 @@ from compiler.compiler_data import CompilerData
 from compiler.compiler_helpers import add_field, compile_error, compile_warning, gen_string_literal, get_field, get_printf, get_sizeof, get_type
 from llvm_types import I1, I32, I8, VOID
 from scanner import Token
-from ast_classes import Accessible, BinaryExpr, Grouping, MemberFlag, Program, Class, Function, Statement, VarDecl, Expression, LiteralExpr, CallExpr, LiteralType, UnaryExpr, VariableExpr, ArrayExpr, ScopeStmt, WhileStmt, AssignmentStmt, ElseStmt, ForStmt, IfStmt, ReturnStmt
+from ast_classes import Accessible, BinaryExpr, FunctionFlag, Grouping, MemberFlag, Program, Class, Function, Statement, VarDecl, Expression, LiteralExpr, CallExpr, LiteralType, UnaryExpr, VariableExpr, ArrayExpr, ScopeStmt, WhileStmt, AssignmentStmt, ElseStmt, ForStmt, IfStmt, ReturnStmt
 from representations.types.base_type import Type
 from representations.types.user_types import UserType, FunctionType
 from representations.types.void_type import VoidType
@@ -432,15 +432,30 @@ class Compiler:
         arg_types = self.gen_arg_types(generate.args)
         type_list = ([cast(UserType, inside)] if inside else []) + [arg_type for _, arg_type in arg_types]
         return_type = get_type(self.data, generate.returns) if generate.returns else VoidType(self.module)
+        
+        caster = FunctionFlag.CAST in generate.function_flags
+        if caster:
+            if not inside:
+                raise compile_error(generate.name, "Cast functions may only be defined inside a class.")
+            if len(arg_types) != 1:
+                raise compile_error(generate.name, f"Cast functions must take exactly one argument (the type being casted from), but got {len(arg_types)}.")
+            if isinstance(return_type, VoidType):
+                raise compile_error(generate.name, "Cast function must return a type.")
+            if return_type.name != inside.name:
+                raise compile_error(generate.name, f"Cast functions must return a value with the type of the class they are inside (expected {inside.name}, got {return_type.name})")
+        
         args: list[ir.Type] = []
         for arg in type_list:
             args.append(arg.llvm_type.as_pointer() if arg.needs_refcount else arg.llvm_type)
         ir_function_ty = ir.FunctionType(return_type.llvm_type, args)
         function_value = ir.Function(self.module, ir_function_ty, f"{self.path}__{generate.name.raw}")
         
-        function_type = FunctionType( self.module, generate.name.raw, type_list, return_type, function_value)
+        function_type = FunctionType(self.module, generate.name.raw, type_list, return_type, function_value)
         function_field = ValueField(function_type, FunctionValue(self.builder, function_type, function_value), generate.member_flags | generate.function_flags)
-        add_field(self.data, generate.name, function_field)
+
+        # Use the function's name if it's not a caster, otherwise use the type's name
+        # that is being casted from.
+        add_field(self.data, generate.name if not caster else generate.args[0][0], function_field)
 
         return function_field
 

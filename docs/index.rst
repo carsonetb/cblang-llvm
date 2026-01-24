@@ -109,7 +109,7 @@ and you are reading documentation generated using it right now.
 
 .. toctree::
    :hidden:
-   :maxdepth: 2
+   :maxdepth: 1
    :caption: Getting started
 
    getting_started/index
@@ -117,10 +117,18 @@ and you are reading documentation generated using it right now.
 
 .. toctree::
    :hidden:
-   :maxdepth: 2
+   :maxdepth: 1
    :caption: Specification
 
    specification/expressions
    specification/statements
    specification/declarations
    specification/ast
+
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Internal Docs 
+
+   internal/ast_classes/ast_classes
+   internal/builtin_types/builtin_types

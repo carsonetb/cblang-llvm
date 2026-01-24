@@ -1,9 +1,13 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 from llvmlite import ir
+from ast_classes import FunctionFlag
 from llvm_types import VOID, I8_POINTER, I32
 import llvmlite.binding as llvm
 from representations.types.base_type import Type
+from representations.value import Value
+from runtime.c_runtime import CRuntime
+from runtime.rc_runtime import RCRuntime
 
 if TYPE_CHECKING:
     from runtime.rc_runtime import RCRuntime
@@ -19,6 +23,7 @@ class UserType(Type):
         self.rc_runtime = rc_runtime
         self.field_names: dict[str, Field] = {}
         self.field_indices: dict[str, int] = {}
+        self.casters: dict[str, Field] = {} # Key is the type name.
 
         self.destructor_type = ir.FunctionType(VOID, [I8_POINTER])
         self.destructor_func = ir.Function(self.module, self.destructor_type, f"{name}_destructor")
@@ -44,6 +49,9 @@ class UserType(Type):
 
         field_list = [f.val_type.llvm_type for f in self.field_names.values()]
         self.field_indices[name] = len(field_list) - 1
+
+        if FunctionFlag.CAST in field.flags:
+            self.casters[name] = field
     
     def finalize(self) -> None:
         field_list = [f.val_type.llvm_type for f in self.field_names.values()]
@@ -54,6 +62,13 @@ class UserType(Type):
     
     def has_field(self, name: str) -> bool:
         return name in self.field_names
+    
+    def castable_from(self, cast_from: Type) -> bool:
+        return cast_from.name in self.casters
+    
+    def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
+        assert self.castable_from(cast_from.val_type)
+        self.call()
     
     def get_destructor(self) -> ir.Function | None:
         if not self.destructor_generated:
