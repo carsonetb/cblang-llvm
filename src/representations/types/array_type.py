@@ -16,17 +16,25 @@ if TYPE_CHECKING:
 
 
 class ArrayType(Type):
+    """
+    The array type is a dynamic array similar to the string type.
+    It is refcounted, and can store any type inside of it.
+    """
+
     def __init__(self, builder: ir.IRBuilder, module: ir.Module, target: llvm.TargetData, contains: Type, runtime: CRuntime, rc_runtime: RCRuntime) -> None:
         super().__init__(module)
         self.builder = builder
+
+        #: This is the type of elements contained inside the array.
+        #: An array cannot store elements of different types.
         self.contains = contains
         self.contains_ptr_type = contains.llvm_type.as_pointer()
 
-        # { Contains*, int32 size, int32 capacity }
+        #: ``{ Contains*, int32 size, int32 capacity }``
         self.array_struct_type = ir.LiteralStructType([self.contains_ptr_type, I32, I32])
         self.array_pointer_type = self.array_struct_type.as_pointer()
 
-        # array<T> init_array(int32 initial_capacity)
+        #: ``array<T> init_array(int32 initial_capacity)``
         self.init_type = ir.FunctionType(self.contains_ptr_type, [I32])
         self.init_func = ir.Function(self.module, self.init_type, name="init_array")
         block = self.init_func.append_basic_block(name="entry")
@@ -54,7 +62,7 @@ class ArrayType(Type):
 
         builder.ret(array_inst)
 
-        # void append_array(Array* array, T value)
+        #: ``void append_array(Array* array, T value)``
         self.append_type = ir.FunctionType(ir.VoidType(), [self.array_pointer_type, contains.llvm_type])
         self.append = ir.Function(self.module, self.append_type, "append_array")
         entry = self.append.append_basic_block("entry")
@@ -100,7 +108,7 @@ class ArrayType(Type):
 
         builder.ret_void()
 
-        # void free(Array* to_free)
+        #: ``void free(Array* to_free)``
         self.free_array_type = ir.FunctionType(VOID, [self.array_pointer_type])
         self.free_array_func = ir.Function(self.module, self.free_array_type, name="free_array")
         block = self.free_array_func.append_basic_block("entry")
@@ -121,6 +129,9 @@ class ArrayType(Type):
 
         builder.ret_void()
 
+        #: Destroys the array and calls the destructor of every
+        #: value contained inside it.
+        #: ``void destroy(byte*)``
         self.destructor_type = ir.FunctionType(VOID, [I8_POINTER])
         self.destructor_func = ir.Function(module, self.destructor_type, "array_destructor")
         block = self.destructor_func.append_basic_block("entry")
@@ -173,20 +184,39 @@ class ArrayType(Type):
     
     @property
     def llvm_type(self) -> ir.Type:
+        """
+        See ``array_struct_type``.
+        """
+
         return self.array_struct_type
     
     @property
     def name(self) -> str:
+        """
+        Generics aren't fully supported, but this basically returns
+        the type in the format that it will be when generics are supported.
+        """
+
         return f"array<{self.contains.name}>"
     
     @property
     def needs_refcount(self) -> bool:
+        """
+        The ``array`` is reference counted.
+        """
+
         return True
     
     def add_field(self, name: str, field: Field) -> None:
         raise RuntimeError("Cannot add a field to the ArrayType.")
     
     def get_field(self, name: str) -> Field:
+        """
+        Some functions are supported that are custom implemented
+        in LLVM IR. These are ``init`` and ``append``, and I plan
+        to implement more in the future.
+        """
+
         if name == "init":
             hl_init_type = FunctionType(self.module, "init", [], self, self.init_func)
             return Field(hl_init_type, {MemberFlag.STATIC})
@@ -197,12 +227,24 @@ class ArrayType(Type):
             raise ValueError(f"Cannot call '{name}' on type '{self.name}'.")
     
     def has_field(self, name: str) -> bool:
+        """
+        Has function fields ``init`` and ``append``.
+        """
+
         return name == "init" or name == "append"
     
     def get_destructor(self) -> ir.Function | None:
+        """
+        See ``destructor_func``.
+        """
         return self.destructor_func
     
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
+        """
+        Only ``append`` can be called via this, ``init`` should be 
+        called directly from the function gotten by ``get_field``.
+        """
+        
         if name == "init":
             raise ValueError("Call 'init' function via get_field.")
         elif name == "append":
@@ -213,14 +255,28 @@ class ArrayType(Type):
             raise ValueError(f"Cannot call '{name}' on type '{self.name}'")
     
     def generate(self, builder: ir.IRBuilder) -> Value:
+        """
+        Generates a new ``array`` wrapped in a ``Value``.
+        """
+
         return Value(builder, self, builder.call(self.init_func, [I32(1)], "initial_value"), "initial_value")
     
     @staticmethod
     def get_struct_val(builder: ir.IRBuilder, struct: ir.Value, index: int, name: str):
+        """
+        Not really unique to ``array``, this should be moved out
+        of here.
+        """
+        
         return builder.gep(struct, [ir.Constant(I32, 0), ir.Constant(I32, index)], name=name)
     
     @staticmethod
     def get_type_size(target_data: llvm.TargetData, ir_type: ir.Type) -> int:
+        """
+        This is also definetely not related to ``array``, and should
+        be moved elsewhere.
+        """
+        
         ir_str = str(ir_type)
 
         type_sizes = {
