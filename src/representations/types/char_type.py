@@ -12,6 +12,11 @@ if TYPE_CHECKING:
 
 
 class CharType(Type):
+    """
+    Represents a signed 8 bit integer, but is effectively unsigned. The 
+    type name is ``char``, and it wraps ``IntType(8)``. 
+    """
+
     def __init__(self, module: ir.Module) -> None:
         super().__init__(module)
     
@@ -37,7 +42,10 @@ class CharType(Type):
         return False
     
     def castable_from(self, cast_from: Type) -> bool:
-        # Use name-based check to avoid circular imports with other primitive types
+        """
+        Castable from ``int``.
+        """
+
         return cast_from.name == "int"
     
     def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
@@ -47,7 +55,10 @@ class CharType(Type):
         return Value(builder, self, as_char, f"{cast_from.val_type.name}_to_char")
     
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
-        # Lazy import to avoid circular dependency
+        """
+        Supports ``==``, ``!=``, ``<``, ``>``, ``<=``, ``>=``, ``+``, and ``-``.
+        """
+
         from representations.types.bool_type import BoolType
         
         lhs = this.load_value(builder)

@@ -11,6 +11,11 @@ if TYPE_CHECKING:
     from runtime.c_runtime import CRuntime
 
 class FloatType(Type):
+    """
+    Represents a floating point value. The type name is ``float`` and 
+    wraps ``FloatType()``. This type is not refcounted. 
+    """
+
     def __init__(self, module: ir.Module) -> None:
         super().__init__(module)
     
@@ -36,7 +41,10 @@ class FloatType(Type):
         return False
     
     def castable_from(self, cast_from: Type) -> bool:
-        # Use name-based check to avoid circular imports with other primitive types
+        """
+        Castable from ``int`` and ``bool``.
+        """
+
         return cast_from.name in ("int", "bool")
     
     def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
@@ -46,7 +54,11 @@ class FloatType(Type):
         return Value(builder, self, as_float, f"{cast_from.val_type.name}_to_float")
     
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
-        # Lazy import to avoid circular dependency
+        """
+        Supports ``==``, ``!=``, ``<``, ``>``, ``<=``, ``>=``,
+        ``+``, ``*``, ``/``, ``-``
+        """
+
         from representations.types.bool_type import BoolType
         
         lhs = this.load_value(builder)

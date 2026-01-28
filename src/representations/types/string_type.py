@@ -13,6 +13,11 @@ if TYPE_CHECKING:
 
 
 class StringType(Type):
+    """
+    The StringType represents a dynamically allocated array of chars ([u]int8s),
+    and *is* reference counted even though it's a primitive type.
+    """
+
     def __init__(self, module: ir.Module, c_runtime: CRuntime) -> None:
         super().__init__(module)
 
@@ -30,6 +35,15 @@ class StringType(Type):
     
     @property
     def llvm_type(self) -> ir.Type:
+        """
+        The LLVM type is ``IntType(8).as_pointer()``, making it a C-style array, where 
+        the ``char`` being pointed to is the first element in the ``string``.
+
+        .. note:: The memory being pointed to is not reference counted, it is allocated
+            using ``malloc``. The pointer itself contained in the ``string`` object 
+            is, however, reference counted.
+        """
+
         return I8_POINTER
     
     @property
@@ -38,6 +52,10 @@ class StringType(Type):
     
     @property
     def needs_refcount(self) -> bool:
+        """
+        The ``string`` type does need reference counting.
+        """
+
         return True
     
     def add_field(self, name: str, field: Field) -> None:
@@ -50,10 +68,21 @@ class StringType(Type):
         return False
     
     def castable_from(self, cast_from: Type) -> bool:
+        """
+        Can be casted from ``int``, ``float``, or ``bool``.
+        """
+
         # Use name-based check to avoid circular imports with other primitive types
         return cast_from.name in ("int", "float", "bool")
     
     def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
+        """
+        A ``string`` can be generated from an ``int``, a ``float``, or a ``bool``. 
+        The process for generating from ``int`` or ``float`` is more complex, 
+        and involves using the C function sprintf to convert the float to the 
+        string.
+        """
+        
         assert self.castable_from(cast_from.val_type)
         val = cast_from.load_value(builder)
         if cast_from.val_type.name in ("int", "float"):
@@ -95,4 +124,8 @@ class StringType(Type):
             assert False
     
     def get_destructor(self) -> ir.Function | None:
+        """
+        Gets the destructor that the memory inside the string.
+        """
+
         return self.destructor_func

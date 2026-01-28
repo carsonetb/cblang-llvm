@@ -9,3 +9,6 @@ Builtin types
     base_type
     bool
     int
+    float
+    string 
+    user_types
