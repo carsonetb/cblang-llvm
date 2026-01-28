@@ -1,7 +1,5 @@
-
-    
 from llvmlite import ir
-from ast_classes import MemberFlag
+from ast_classes import MemberFlag, Span
 from compiler.compiler_data import CompilerData
 from llvm_types import I32, I8
 from representations.field import ValueField
@@ -10,15 +8,21 @@ from representations.types.user_types import FunctionType
 from representations.value import FunctionValue, RCValue, Value
 from runtime.c_runtime import CRuntime
 from scanner import Token
+from rich import print
 
 
-def compile_error(token: Token, msg: str) -> RuntimeError:
-    print(f"@Compiler [line {token.line}] [token {token.raw}] [ERROR] {msg}")
+def compile_error(token: Token | Span, msg: str) -> RuntimeError:
+    line_repr = f"[at [i]{token.pos}[i]]" if token is Token else f"[from [i]{token}[/i]]"
+    raw = f" [token [bold][i]{token.raw}[/i][/bold]]" if token is Token else ""
+    print(f"[Compiler] {line_repr}{raw} [bold red][ERROR] {msg}[/bold red]")
     return RuntimeError()
 
 
-def compile_warning(token: Token, msg: str) -> None:
-    print(f"@Compiler [line {token.line}] [token {token.raw}] [WARNING] {msg}")
+def compile_warning(token: Token | Span, msg: str) -> RuntimeError:
+    line_repr = f"[at [i]{token.pos}[i]]" if token is Token else f"[from [i]{token}[/i]]"
+    raw = f" [token [bold][i]{token.raw}[/i][/bold]]" if token is Token else ""
+    print(f"[Compiler] {line_repr}{raw} [i yellow][WARNING] {msg}[/i yellow]")
+    return RuntimeError()
 
 
 def get_printf(module: ir.Module, builder: ir.IRBuilder, type_db: dict[str, Type], c_runtime: CRuntime) -> ValueField:

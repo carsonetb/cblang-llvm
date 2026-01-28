@@ -74,16 +74,25 @@ class TokenType(Enum):
     EOF = auto()
 
 
+@dataclass 
+class CodePosition:
+    line: int 
+    col: int 
+
+    def __repr__(self) -> str:
+        return f"({self.line}:{self.col})"
+
+
 @dataclass
 class Token:
     ttype: TokenType
     literal: int | float | str | bool | None
     raw: str
-    line: int
+    pos: CodePosition
 
     @staticmethod
     def make_external(raw: str) -> Token:
-        return Token(TokenType.IDENTIFIER, None, raw, -1)
+        return Token(TokenType.IDENTIFIER, None, raw, CodePosition(-1, -1))
     
     def __repr__(self) -> str:
         return self.raw
@@ -98,6 +107,7 @@ class Scanner:
         self.start: int = 0
         self.current: int = 0
         self.line: int = 1
+        self.col: int = 1
         self.tokens: list[Token] = []
 
     @staticmethod
@@ -113,13 +123,14 @@ class Scanner:
 
         match character:
             case " ":
-                pass
+                self.col += 1
             case "\r":
                 pass
             case "\t":
-                pass
+                self.col += 4
             case "\n":
                 self.line += 1
+                self.col = 1
             case "(":
                 self.add_token(TokenType.LEFT_PAREN)
             case ")":
@@ -321,7 +332,8 @@ class Scanner:
     def add_token(
         self, ttype: TokenType, literal: int | float | str | bool | None = None
     ):
-        self.tokens.append(Token(ttype, literal, self.get_token_raw(), self.line))
+        self.tokens.append(Token(ttype, literal, self.get_token_raw(), CodePosition(self.line, self.col)))
+        self.col += len(self.tokens[-1].raw)
 
     def scan_source(self) -> list[Token]:
         while not self.is_at_end():

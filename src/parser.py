@@ -1,10 +1,11 @@
 from ast_classes import (
     ArrayExpr, AssignmentStmt, BinaryExpr, CallExpr, Class, ElseStmt,
     Expression, ForStmt, Function, FunctionFlag, Grouping, IfStmt, Import, LambdaExpr,
-    LiteralExpr, LiteralType, MemberFlag, Program, ReturnStmt, ScopeStmt,
+    LiteralExpr, LiteralType, MemberFlag, Program, ReturnStmt, ScopeStmt, Span,
     Statement, UnaryExpr, VarDecl, VariableExpr, WhileStmt
 )
-from scanner import Token, TokenType
+from scanner import CodePosition, Token, TokenType
+from rich import print
 
 
 class ParseException(RuntimeError):
@@ -17,12 +18,23 @@ class Parser:
     def __init__(self, tokens: list[Token]) -> None:
         self.tokens = tokens
         self.current = 0
+        self.node_pos_stack: list[CodePosition] = []
+    
+    def begin_node(self, current=False) -> None:
+        self.node_pos_stack.append((self.previous() if not current else self.peek()).pos)
+    
+    def end_node(self) -> CodePosition:
+        return self.node_pos_stack.pop()
+    
+    def get_span(self) -> Span:
+        return Span(self.end_node(), self.previous().pos)
     
     def parse(self) -> Program: 
         imports: list[Import] = []
         statements: list[Class | Function | VarDecl] = []
 
         while self.match(TokenType.IMPORT_KW):
+            self.begin_node()
             imports.append(self.import_statement())
             self.consume_semicolon()
         
@@ -38,7 +50,7 @@ class Parser:
         path: list[Token] = [self.consume(TokenType.IDENTIFIER, "Expected start of module path after 'import'")]
         while self.match(TokenType.DOT):
             path.append(self.consume(TokenType.IDENTIFIER, "Expected module path item after '.' in import statement"))
-        return Import(path)
+        return Import(self.get_span(), path)
     
     # ========== STATEMENTS ==========
     
@@ -73,8 +85,8 @@ class Parser:
         
         if self.match(TokenType.LEFT_CURLY):
             body = self.scope_body()
-            self.consume(TokenType.RIGHT_CURLY, "Expected '}' after scope")
-            return ScopeStmt(body)
+            end = self.consume(TokenType.RIGHT_CURLY, "Expected '}' after scope")
+            return ScopeStmt(self.get_span(), body)
         
         return self.semicolon_statement()
     
@@ -82,36 +94,43 @@ class Parser:
         # For empty statements just return an empty Scope.
         # Kind of a hack.
         if self.match(TokenType.SEMICOLON):
-            return ScopeStmt([])
+            self.begin_node()
+            return ScopeStmt(self.get_span(), [])
         
         if self.match(TokenType.RETURN_KW):
+            self.begin_node()
             value: Expression | None = None
             if not self.check(TokenType.SEMICOLON):
                 value = self.expression()
             self.consume_semicolon()
-            return ReturnStmt(value)
+            return ReturnStmt(self.get_span(), value)
         
         # Declaration of a variable: (flags)? IDENTIFIER IDENTIFIER
         # Need to look past any flags to find the type and name identifiers
         if self.check_var_decl():
             return self.var_decl()
         
+        self.begin_node(True)
+        
         # Either the expression that is plain evaluated or this
         # is an Accessible that will be set.
         expr = self.expression()
         
         if self.check(TokenType.EQUAL):
-            eq = self.consume(TokenType.EQUAL, "")
+            self.consume(TokenType.EQUAL, "")
             if not isinstance(expr, (VariableExpr, CallExpr)):
                 raise self.error(self.previous(), "Invalid assignment target")
             value = self.expression()
             self.consume_semicolon()
-            return AssignmentStmt(expr, value, eq)
+            return AssignmentStmt(self.get_span(), expr, value)
+
+        self.end_node()
         
         self.consume_semicolon()
         return expr
     
     def var_decl(self) -> VarDecl:
+        self.begin_node(True)
         flags = self.member_flags()
         type_token = self.consume(TokenType.IDENTIFIER, "Expected type name")
         name_token = self.consume(TokenType.IDENTIFIER, "Expected variable name")
@@ -120,18 +139,23 @@ class Parser:
         value = self.expression()
         
         self.consume_semicolon()
-        return VarDecl((type_token, name_token), value, flags)
+        return VarDecl(self.get_span(), (type_token, name_token), value, flags)
     
     def if_stmt(self, use_elif_kw: bool = False) -> IfStmt:
+        self.begin_node(True)
         statement_name = "elif" if use_elif_kw else "if"
-        keyword = self.consume(TokenType.ELIF_KW if use_elif_kw else TokenType.IF_KW, f"Expected '{statement_name}'")
+        self.consume(TokenType.ELIF_KW if use_elif_kw else TokenType.IF_KW, f"Expected '{statement_name}'")
         self.consume(TokenType.LEFT_PAREN, f"Expected '(' after {statement_name}")
         condition = self.expression()
         self.consume(TokenType.RIGHT_PAREN, f"Expected ')' after {statement_name} condition")
         
+        self.begin_node(True)
         self.consume(TokenType.LEFT_CURLY, f"Expected '{{' before {statement_name} body")
         body = self.scope_body()
         self.consume(TokenType.RIGHT_CURLY, f"Expected '}}' after {statement_name} body")
+        body_span = self.get_span()
+
+        span = self.get_span()
         
         else_branch: IfStmt | ElseStmt | None = None
         if self.match(TokenType.ELIF_KW):
@@ -139,27 +163,34 @@ class Parser:
             self.current -= 1
             else_branch = self.if_stmt(True)
         elif self.match(TokenType.ELSE_KW):
+            self.begin_node()
+            self.begin_node(True)
             self.consume(TokenType.LEFT_CURLY, "Expected '{' after 'else'")
             else_body = self.scope_body()
             self.consume(TokenType.RIGHT_CURLY, "Expected '}' after else body")
-            else_branch = ElseStmt(ScopeStmt(else_body))
+            body_span = self.get_span()
+            else_branch = ElseStmt(self.get_span(), ScopeStmt(body_span, else_body))
         
-        return IfStmt(condition, ScopeStmt(body), else_branch, keyword)
+        return IfStmt(span, condition, ScopeStmt(body_span, body), else_branch)
     
     def while_stmt(self) -> WhileStmt:
-        keyword = self.consume(TokenType.WHILE_KW, "Expected 'while'")
+        self.begin_node(True)
+        self.consume(TokenType.WHILE_KW, "Expected 'while'")
         self.consume(TokenType.LEFT_PAREN, "Expected '(' after 'while'")
         condition = self.expression()
         self.consume(TokenType.RIGHT_PAREN, "Expected ')' after while condition")
         
+        self.begin_node(True)
         self.consume(TokenType.LEFT_CURLY, "Expected '{' before while body")
         body = self.scope_body()
         self.consume(TokenType.RIGHT_CURLY, "Expected '}' after while body")
+        body_span = self.get_span()
         
-        return WhileStmt(condition, ScopeStmt(body), keyword)
+        return WhileStmt(self.get_span(), condition, ScopeStmt(body_span, body))
     
     def for_stmt(self) -> ForStmt:
-        keyword = self.consume(TokenType.FOR_KW, "Expected 'for'")
+        self.begin_node(True)
+        self.consume(TokenType.FOR_KW, "Expected 'for'")
         self.consume(TokenType.LEFT_PAREN, "Expected '(' after 'for'")
         
         var_type = self.consume(TokenType.IDENTIFIER, "Expected type in for loop")
@@ -173,7 +204,7 @@ class Parser:
         body = self.scope_body()
         self.consume(TokenType.RIGHT_CURLY, "Expected '}' after for body")
         
-        return ForStmt((var_type, var_name), iterable, body, keyword)
+        return ForStmt(self.get_span(), (var_type, var_name), iterable, body)
     
     def scope_body(self) -> list[Statement]:
         statements: list[Statement] = []
@@ -184,10 +215,14 @@ class Parser:
     # ========== DECLARATIONS ==========
     
     def function_decl(self) -> Function:
+        self.begin_node(True)
         member_flags, func_flags = self.function_flags()
         
         self.consume(TokenType.SCOPE_KW, "Expected 'scope' keyword")
-        name = self.consume(TokenType.IDENTIFIER, "Expected function name")
+        if not FunctionFlag.OPERATOR in func_flags:
+            name = self.consume(TokenType.IDENTIFIER, "Expected function name")
+        else:
+            name = self.consume(self.peek().ttype, "")
         
         # Optional parameters
         args: list[tuple[Token, Token]] = []
@@ -206,9 +241,10 @@ class Parser:
         body = self.scope_body()
         self.consume(TokenType.RIGHT_CURLY, "Expected '}' to end function body")
         
-        return Function(name, args, returns, body, member_flags, func_flags)
+        return Function(self.get_span(), name, args, returns, body, member_flags, func_flags)
     
     def class_decl(self) -> Class:
+        self.begin_node(True)
         self.consume(TokenType.CLASS_KW, "Expected 'class' keyword")
         name = self.consume(TokenType.IDENTIFIER, "Expected class name")
         
@@ -234,7 +270,7 @@ class Parser:
         
         self.consume(TokenType.RIGHT_PAREN, "Expected ')' to end class body")
         
-        return Class(name, args, members)
+        return Class(self.get_span(), name, args, members)
     
     def member_decl(self) -> Class | Function | VarDecl:
         if self.check(TokenType.CLASS_KW):
@@ -254,6 +290,7 @@ class Parser:
         return self.member_var_decl()
     
     def member_var_decl(self) -> VarDecl:
+        self.begin_node(True)
         flags = self.member_flags()
         type_token = self.consume(TokenType.IDENTIFIER, "Expected type name")
         name_token = self.consume(TokenType.IDENTIFIER, "Expected variable name")
@@ -261,7 +298,7 @@ class Parser:
         self.consume(TokenType.EQUAL, "Expected '=' after member variable declaration.")
         value = self.expression()
         
-        return VarDecl((type_token, name_token), value, flags)
+        return VarDecl(self.get_span(), (type_token, name_token), value, flags)
     
     def parameters(self) -> list[tuple[Token, Token]]:
         params: list[tuple[Token, Token]] = []
@@ -328,108 +365,138 @@ class Parser:
         return self.logic_or()
     
     def logic_or(self) -> Expression:
+        self.begin_node(True)
         expr = self.logic_and()
         
         while self.match(TokenType.PIPE_PIPE):
             op = self.previous()
             right = self.logic_and()
-            expr = BinaryExpr(expr, op, right)
+            expr = BinaryExpr(self.get_span(), expr, op, right)
+        
+        self.end_node()
         
         return expr
     
     def logic_and(self) -> Expression:
+        self.begin_node(True)
         expr = self.equality()
         
         while self.match(TokenType.AND_AND):
             op = self.previous()
             right = self.equality()
-            expr = BinaryExpr(expr, op, right)
+            expr = BinaryExpr(self.get_span(), expr, op, right)
+        
+        self.end_node()
         
         return expr
     
     def equality(self) -> Expression:
+        self.begin_node(True)
         expr = self.comparison()
         
         while self.match(TokenType.EQUAL_EQUAL) or self.match(TokenType.BANG_EQUAL):
             op = self.previous()
             right = self.comparison()
-            expr = BinaryExpr(expr, op, right)
+            expr = BinaryExpr(self.get_span(), expr, op, right)
+
+        self.end_node()
         
         return expr
     
     def comparison(self) -> Expression:
+        self.begin_node(True)
         expr = self.term()
         
         while self.match(TokenType.RIGHT_ANGLE) or self.match(TokenType.GREATER_EQUAL) or \
               self.match(TokenType.LEFT_ANGLE) or self.match(TokenType.LESS_EQUAL):
             op = self.previous()
             right = self.term()
-            expr = BinaryExpr(expr, op, right)
+            expr = BinaryExpr(self.get_span(), expr, op, right)
+
+        self.end_node()
         
         return expr
     
     def term(self) -> Expression:
+        self.begin_node(True)
         expr = self.factor()
         
         while self.match(TokenType.PLUS) or self.match(TokenType.MINUS):
             op = self.previous()
             right = self.factor()
-            expr = BinaryExpr(expr, op, right)
+            expr = BinaryExpr(self.get_span(), expr, op, right)
+
+        self.end_node()
         
         return expr
     
     def factor(self) -> Expression:
+        self.begin_node(True)
         expr = self.unary()
         
         while self.match(TokenType.STAR) or self.match(TokenType.SLASH):
             op = self.previous()
             right = self.unary()
-            expr = BinaryExpr(expr, op, right)
+            expr = BinaryExpr(self.get_span(), expr, op, right)
+
+        self.end_node()
         
         return expr
     
     def unary(self) -> Expression:
+        self.begin_node(True)
         if self.match(TokenType.BANG) or self.match(TokenType.MINUS):
             op = self.previous()
             right = self.unary()
-            return UnaryExpr(op, right)
+            return UnaryExpr(self.get_span(), op, right)
+
+        self.end_node()
         
         return self.primary()
     
     def primary(self) -> Expression:
         if self.match(TokenType.INT):
+            self.begin_node()
             tok = self.previous()
-            return LiteralExpr(LiteralType.INT, tok.literal if tok.literal is not None else 0, tok)
+            return LiteralExpr(self.get_span(), LiteralType.INT, tok.literal if tok.literal is not None else 0, tok)
         if self.match(TokenType.FLOAT):
+            self.begin_node()
             tok = self.previous()
-            return LiteralExpr(LiteralType.FLOAT, tok.literal if tok.literal is not None else 0.0, tok)
+            return LiteralExpr(self.get_span(), LiteralType.FLOAT, tok.literal if tok.literal is not None else 0.0, tok)
         if self.match(TokenType.STRING):
+            self.begin_node()
             tok = self.previous()
-            return LiteralExpr(LiteralType.STRING, tok.literal if tok.literal is not None else "", tok)
+            return LiteralExpr(self.get_span(), LiteralType.STRING, tok.literal if tok.literal is not None else "", tok)
         if self.match(TokenType.CHARACTER):
+            self.begin_node()
             tok = self.previous()
-            return LiteralExpr(LiteralType.CHAR, tok.literal if tok.literal is not None else "", tok)
+            return LiteralExpr(self.get_span(), LiteralType.CHAR, tok.literal if tok.literal is not None else "", tok)
         if self.match(TokenType.TRUE_KW):
-            return LiteralExpr(LiteralType.BOOL, True, self.previous())
+            self.begin_node()
+            return LiteralExpr(self.get_span(), LiteralType.BOOL, True, self.previous())
         if self.match(TokenType.FALSE_KW):
-            return LiteralExpr(LiteralType.BOOL, False, self.previous())
+            self.begin_node()
+            return LiteralExpr(self.get_span(), LiteralType.BOOL, False, self.previous())
         
         if self.match(TokenType.LEFT_PAREN):
+            self.begin_node()
             expr = self.expression()
             self.consume(TokenType.RIGHT_PAREN, "Expected ')' after expression")
-            return Grouping(expr)
+            return Grouping(self.get_span(), expr)
         
         if self.match(TokenType.LEFT_BRACKET):
+            self.begin_node()
             elements: list[Expression] = []
             if not self.check(TokenType.RIGHT_BRACKET):
                 elements = self.expressions()
             end = self.consume(TokenType.RIGHT_BRACKET, "Expected ']' after array elements")
-            return ArrayExpr(end, elements)
+            return ArrayExpr(self.get_span(), end, elements)
         
         if self.match(TokenType.LEFT_CURLY):
+            self.begin_node()
             body = self.scope_body()
             self.consume(TokenType.RIGHT_CURLY, "Expected '}' after scope")
-            return LambdaExpr(body)
+            return LambdaExpr(self.get_span(), body)
         
         if self.check(TokenType.IDENTIFIER):
             return self.function_or_variable()
@@ -437,6 +504,7 @@ class Parser:
         raise self.error(self.peek(), "Expected expression")
     
     def function_or_variable(self) -> VariableExpr | CallExpr:
+        self.begin_node(True)
         name = self.consume(TokenType.IDENTIFIER, "Expected identifier")
         
         if self.match(TokenType.LEFT_PAREN):
@@ -444,9 +512,9 @@ class Parser:
             if not self.check(TokenType.RIGHT_PAREN):
                 args = self.expressions()
             self.consume(TokenType.RIGHT_PAREN, "Expected ')' after arguments")
-            result = CallExpr(None, name, args)
+            result = CallExpr(self.get_span(), None, name, args)
         else:
-            result = VariableExpr(None, name)
+            result = VariableExpr(self.get_span(), None, name)
         
         if self.match(TokenType.DOT):
             result.access = self.function_or_variable()
@@ -492,6 +560,7 @@ class Parser:
     def previous(self) -> Token:
         return self.tokens[self.current - 1]
 
-    def error(self, token: Token, msg: str) -> ParseException:
-        print(f"[line {token.line}] [token {token.raw}] [ERROR] {msg}.")
+    @staticmethod
+    def error(token: Token, msg: str) -> ParseException:
+        print(f"[Parser] [at [i]{token.pos}[/i]] [token [bold i]{token.raw}[/bold i]] [bold red][ERROR] {msg}[/bold red]")
         return ParseException()

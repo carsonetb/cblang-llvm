@@ -7,7 +7,7 @@ from llvmlite import ir
 import llvmlite.binding as llvm
 from compiler.compiler_data import CompilerData
 from compiler.compiler_helpers import add_field, compile_error, compile_warning, gen_string_literal, get_field, get_printf, get_sizeof, get_type
-from llvm_types import I1, I32, I8, VOID
+from llvm_types import I1, I32
 from scanner import Token
 from ast_classes import Accessible, BinaryExpr, FunctionFlag, Grouping, MemberFlag, Program, Class, Function, Statement, VarDecl, Expression, LiteralExpr, CallExpr, LiteralType, UnaryExpr, VariableExpr, ArrayExpr, ScopeStmt, WhileStmt, AssignmentStmt, ElseStmt, ForStmt, IfStmt, ReturnStmt
 from representations.types.base_type import Type
@@ -121,8 +121,6 @@ class Compiler:
         return Value(self.builder, ret_type, ir.Constant(ret_type.llvm_type, lit.val), "generated_literal")
     
     def gen_function_call(self, expr: CallExpr, on: Value | None = None) -> Value | VoidValue:
-        # TODO: Validate arguments.
-
         if on is not None:
             try:
                 field = on.val_type.get_field(expr.callee.raw)
@@ -275,7 +273,7 @@ class Compiler:
         assert not isinstance(source, VoidValue)
 
         if source.val_type.name != target.val_type.name:
-            raise compile_error(stmt.equal_token, f"Cannot assign value of type '{source.val_type.name}' to variable of type '{target.val_type.name}'")
+            raise compile_error(stmt.spans, f"Cannot assign value of type '{source.val_type.name}' to variable of type '{target.val_type.name}'")
 
         if isinstance(target, RCValue):
             source.retain(self.builder, self.rc_runtime)
@@ -288,7 +286,7 @@ class Compiler:
         assert not isinstance(branching_val, VoidValue)
 
         if branching_val.val_type.name != "bool":
-            raise compile_error(stmt.keyword_tok, "The condition in an if statement must evaluate to type 'bool'.")
+            raise compile_error(stmt.spans, "The condition in an if statement must evaluate to type 'bool'.")
         branching_res = self.builder.icmp_unsigned("==", branching_val.load_value(self.builder), I1(1), "branching_res")
 
         truthy_block = self.builder.append_basic_block("truthy")
@@ -338,7 +336,7 @@ class Compiler:
         assert not isinstance(branching_val, VoidValue)
 
         if branching_val.val_type.name != "bool":
-            raise compile_error(stmt.keyword_tok, "The condition in a while statement must evaluate to type 'bool'.")
+            raise compile_error(stmt.spans, "The condition in a while statement must evaluate to type 'bool'.")
         branching_res = self.builder.icmp_unsigned("==", branching_val.load_value(self.builder), I1(1), "branching_res")
 
         self.builder.cbranch(branching_res, loop_block, continued_block)
@@ -348,7 +346,7 @@ class Compiler:
         if returns is None:
             self.builder.branch(cond_block)
         else:
-            compile_warning(stmt.keyword_tok, "The while block always returns, consider using an if statement instead.")
+            compile_warning(stmt.spans, "The while block always returns, consider using an if statement instead.")
         
         self.builder.position_at_start(continued_block)
         return returns
@@ -434,6 +432,11 @@ class Compiler:
         return_type = get_type(self.data, generate.returns) if generate.returns else VoidType(self.module)
         
         caster = FunctionFlag.CAST in generate.function_flags
+        operator = FunctionFlag.OPERATOR in generate.function_flags
+
+        if caster and operator:
+            raise compile_error(generate.name, "Function cannot be both a caster and an operator.")
+
         if caster:
             if not inside:
                 raise compile_error(generate.name, "Cast functions may only be defined inside a class.")
@@ -444,6 +447,14 @@ class Compiler:
             if return_type.name != inside.name:
                 raise compile_error(generate.name, f"Cast functions must return a value with the type of the class they are inside (expected {inside.name}, got {return_type.name})")
         
+        if operator:
+            if not inside:
+                raise compile_error(generate.name, "Operator functions may only be defined inside a class.")
+            if isinstance(return_type, VoidType):
+                raise compile_error(generate.name, "Must return the result of the operation.")
+            if return_type.name != inside.name:
+                raise compile_error(generate.name, f"Operator functions must return a value with the type of the class they are inside (expected {inside.name}, go {return_type.name})")
+
         args: list[ir.Type] = []
         for arg in type_list:
             args.append(arg.llvm_type.as_pointer() if arg.needs_refcount else arg.llvm_type)
@@ -636,5 +647,3 @@ class Compiler:
         os.system(f"gcc -o {out_directory}/program {out_directory}/out.o")
 
         print("Done!")
-
-        # TODO: Actually compile the module.

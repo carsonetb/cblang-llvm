@@ -2,13 +2,22 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from enum import Enum, auto
 
-from scanner import Token, dataclass
+from scanner import CodePosition, Token, dataclass
 import llvmlite.ir as ir
 
 
 @dataclass
+class Span:
+    start: CodePosition
+    end: CodePosition
+
+    def __repr__(self) -> str:
+        return f"{self.start}-{self.end}"
+
+
+@dataclass
 class Statement(ABC):
-    pass
+    spans: Span
 
 
 @dataclass
@@ -108,7 +117,6 @@ class VarDecl(Statement):
 class AssignmentStmt(Statement):
     target: Accessible
     value: Expression
-    equal_token: Token
 
 
 @dataclass
@@ -121,7 +129,6 @@ class IfStmt(Statement):
     condition: Expression
     body: ScopeStmt
     else_branch: IfStmt | ElseStmt | None
-    keyword_tok: Token
 
 
 @dataclass
@@ -133,7 +140,6 @@ class ElseStmt(Statement):
 class WhileStmt(Statement):
     condition: Expression
     body: ScopeStmt
-    keyword_tok: Token
 
 
 @dataclass
@@ -141,7 +147,6 @@ class ForStmt(Statement):
     var_type_name: tuple[Token, Token]
     iterable: Expression
     body: list[Statement]
-    for_kw: Token
 
 
 @dataclass
