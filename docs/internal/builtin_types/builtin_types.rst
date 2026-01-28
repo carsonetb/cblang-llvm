@@ -7,3 +7,5 @@ Builtin types
     :caption: Builtin types 
 
     base_type
+    bool
+    int

@@ -6,6 +6,11 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path('..', 'src').resolve()))
+
 project = 'cblang-llvm'
 copyright = '2026, Carson Bates (carsonetb)'
 author = 'Carson Bates (carsonetb)'
@@ -13,7 +18,13 @@ author = 'Carson Bates (carsonetb)'
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
-extensions = []
+extensions = [
+    "sphinx.ext.autodoc"
+]
+
+autodoc_default_options = {
+    'member-order': 'bysource'
+}
 
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']

@@ -11,6 +11,11 @@ if TYPE_CHECKING:
     from runtime.c_runtime import CRuntime
 
 class IntType(Type):
+    """
+    Represents a signed 32 bit integer. The type name is ``int``, and it 
+    wraps ``IntType(32)``. This type is not refcounted.
+    """
+
     def __init__(self, module: ir.Module) -> None:
         super().__init__(module)
     
@@ -36,7 +41,10 @@ class IntType(Type):
         return False
     
     def castable_from(self, cast_from: Type) -> bool:
-        # Use name-based check to avoid circular imports with other primitive types
+        """
+        Castable from ``char`` and ``bool``.
+        """
+        
         return cast_from.name in ("char", "bool")
     
     def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
@@ -46,6 +54,11 @@ class IntType(Type):
         return Value(builder, self, out_ir, f"{cast_from.val_type.name}_to_int")
     
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
+        """
+        Supports ``==``, ``!=``, ``<``, ``>``, ``<=``, ``>=``,
+        ``+``, ``*``, ``/``, ``-``
+        """
+        
         # Lazy import to avoid circular dependency
         from representations.types.bool_type import BoolType
         

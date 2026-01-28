@@ -76,7 +76,6 @@ ordered in terms of importance:
 - Variadic arguments
 - Generics
 - For statements
-- Types can define custom operators
 - Fixing the obvious self-referencing problem
 - Abstract classes
 - Class inheritance

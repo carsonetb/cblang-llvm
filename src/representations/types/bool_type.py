@@ -14,6 +14,11 @@ if TYPE_CHECKING:
 from llvm_types import I32, FLOAT
 
 class BoolType(Type):
+    """
+    The ``bool`` type wraps ``IntType(1)``. It is not refcounted,
+    and is constructed by the literal ``true`` or ``false``.
+    """
+
     def __init__(self, module: ir.Module) -> None:
         super().__init__(module)
     
@@ -39,7 +44,9 @@ class BoolType(Type):
         return False
     
     def castable_from(self, cast_from: Type) -> bool:
-        # Use name-based check to avoid circular imports with other primitive types
+        """
+        Castable from ``int``, ``float``, and ``char``.
+        """
         return cast_from.name in ("int", "float", "char")
     
     def generate_from(self, builder: ir.IRBuilder, cast_from: Value, rc_runtime: RCRuntime, c_runtime: CRuntime, target_data: llvm.TargetData) -> Value:
@@ -54,6 +61,10 @@ class BoolType(Type):
         return Value(builder, self, as_bool, f"{cast_from.val_type.name}_to_bool") # type: ignore
     
     def call(self, builder: ir.IRBuilder, this: Value, name: str, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value:
+        """
+        Supports ``==``, ``!=``, and ``!`` operators.
+        """
+        
         if name == "==" or name == "!=":
             out_ir = builder.icmp_unsigned(name, this.load_value(builder), args[0].load_value(builder), "arith_res")
         elif name == "!":
