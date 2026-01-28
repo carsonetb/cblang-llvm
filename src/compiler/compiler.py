@@ -8,7 +8,7 @@ import llvmlite.binding as llvm
 from compiler.compiler_data import CompilerData
 from compiler.compiler_helpers import add_field, compile_error, compile_warning, gen_string_literal, get_field, get_printf, get_sizeof, get_type
 from llvm_types import I1, I32
-from scanner import Token
+from scanner import Token, TokenType
 from ast_classes import Accessible, BinaryExpr, FunctionFlag, Grouping, MemberFlag, Program, Class, Function, Statement, VarDecl, Expression, LiteralExpr, CallExpr, LiteralType, UnaryExpr, VariableExpr, ArrayExpr, ScopeStmt, WhileStmt, AssignmentStmt, ElseStmt, ForStmt, IfStmt, ReturnStmt
 from representations.types.base_type import Type
 from representations.types.user_types import UserType, FunctionType
@@ -452,8 +452,35 @@ class Compiler:
                 raise compile_error(generate.name, "Operator functions may only be defined inside a class.")
             if isinstance(return_type, VoidType):
                 raise compile_error(generate.name, "Must return the result of the operation.")
-            if return_type.name != inside.name:
-                raise compile_error(generate.name, f"Operator functions must return a value with the type of the class they are inside (expected {inside.name}, go {return_type.name})")
+
+            unary = False
+            match generate.name.ttype:
+                case TokenType.PLUS: required_ret = inside.name 
+                case TokenType.MINUS: 
+                    if len(arg_types) == 0:
+                        unary = True
+                    required_ret = inside.name 
+                    # TODO: Seperate name for unary and binary minus.
+                case TokenType.STAR: required_ret = inside.name  
+                case TokenType.SLASH: required_ret = inside.name 
+                case TokenType.CARET: required_ret = inside.name  
+                case TokenType.MODULO: required_ret = inside.name  
+                case TokenType.PIPE: required_ret = inside.name
+                case TokenType.EQUAL_EQUAL: required_ret = "bool"
+                case TokenType.BANG_EQUAL: required_ret = "bool"
+                case TokenType.LESS_EQUAL: required_ret = "bool"
+                case TokenType.GREATER_EQUAL: required_ret = "bool"
+                case TokenType.BANG: 
+                    unary = True
+                    required_ret = inside.name
+                case _: raise compile_error(generate.name, "Unexpected token for an operator function. Can be '+', '-', '*', '/', '^', '%', '|', '==', '!=', '<=', or '>='")
+            
+            if return_type.name != required_ret:
+                raise compile_error(generate.name, f"This operator function is required to return type {required_ret}, but got type {return_type.name}")
+            if (unary and len(arg_types) != 0) or (not unary and len(arg_types) != 1):
+                raise compile_error(generate.name, f"This operator function must take exactly {0 if unary else 1} argument, but it actually takes {len(arg_types)}.")
+            if not unary and type_list[0].name != inside.name:
+                raise compile_error(generate.name, f"The argument for this operator function must be of type {inside.name}.")
 
         args: list[ir.Type] = []
         for arg in type_list:

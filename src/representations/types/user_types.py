@@ -24,6 +24,7 @@ class UserType(Type):
         self.field_names: dict[str, Field] = {}
         self.field_indices: dict[str, int] = {}
         self.casters: list[str] = [] # list of names
+        self.operators: list[str] = []
 
         self.destructor_type = ir.FunctionType(VOID, [I8_POINTER])
         self.destructor_func = ir.Function(self.module, self.destructor_type, f"{name}_destructor")
