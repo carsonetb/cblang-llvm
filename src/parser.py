@@ -1,3 +1,4 @@
+from rich.text import Text
 from ast_classes import (
     ArrayExpr, AssignmentStmt, BinaryExpr, CallExpr, Class, ElseStmt,
     Expression, ForStmt, Function, FunctionFlag, Grouping, IfStmt, Import, LambdaExpr,
@@ -21,32 +22,38 @@ class Parser:
         self.node_pos_stack: list[CodePosition] = []
     
     def begin_node(self, current=False) -> None:
-        self.node_pos_stack.append((self.previous() if not current else self.peek()).pos)
+        token = self.previous() if not current else self.peek()
+        self.node_pos_stack.append(token.pos)
     
     def end_node(self) -> CodePosition:
         return self.node_pos_stack.pop()
     
-    def get_span(self) -> Span:
-        return Span(self.end_node(), self.previous().pos)
+    def get_span(self, pop=True) -> Span:
+        return Span(self.end_node() if pop else self.node_pos_stack[-1], self.previous().pos)
     
     def parse(self) -> Program: 
-        imports: list[Import] = []
-        statements: list[Class | Function | VarDecl] = []
+        try:
+            imports: list[Import] = []
+            statements: list[Class | Function | VarDecl] = []
 
-        while self.match(TokenType.IMPORT_KW):
-            self.begin_node()
-            imports.append(self.import_statement())
-            self.consume_semicolon()
-        
-        while not self.check(TokenType.EOF):
-            new_stmt = self.statement()
-            if not isinstance(new_stmt, (Class, Function, VarDecl)):
-                raise self.error(self.previous(), "Expression on this line is not a Class, Function, or Variable Declaration.")
-            statements.append(new_stmt)
+            while self.match(TokenType.IMPORT_KW):
+                imports.append(self.import_statement())
+                self.consume_semicolon()
+            
+            while not self.check(TokenType.EOF):
+                new_stmt = self.statement()
+                if not isinstance(new_stmt, (Class, Function, VarDecl)):
+                    raise self.error(self.previous(), "Expression on this line is not a Class, Function, or Variable Declaration.")
+                statements.append(new_stmt)
 
-        return Program(imports, statements)
+            return Program(imports, statements)
+        except ParseException:
+            return Program([], [])
+        except:
+            raise self.error(self.previous(), "The parser encountered a critical error.")
     
     def import_statement(self) -> Import:
+        self.begin_node()
         path: list[Token] = [self.consume(TokenType.IDENTIFIER, "Expected start of module path after 'import'")]
         while self.match(TokenType.DOT):
             path.append(self.consume(TokenType.IDENTIFIER, "Expected module path item after '.' in import statement"))
@@ -84,6 +91,7 @@ class Parser:
             return self.class_decl()
         
         if self.match(TokenType.LEFT_CURLY):
+            self.begin_node()
             body = self.scope_body()
             end = self.consume(TokenType.RIGHT_CURLY, "Expected '}' after scope")
             return ScopeStmt(self.get_span(), body)
@@ -371,7 +379,7 @@ class Parser:
         while self.match(TokenType.PIPE_PIPE):
             op = self.previous()
             right = self.logic_and()
-            expr = BinaryExpr(self.get_span(), expr, op, right)
+            expr = BinaryExpr(self.get_span(False), expr, op, right)
         
         self.end_node()
         
@@ -384,7 +392,7 @@ class Parser:
         while self.match(TokenType.AND_AND):
             op = self.previous()
             right = self.equality()
-            expr = BinaryExpr(self.get_span(), expr, op, right)
+            expr = BinaryExpr(self.get_span(False), expr, op, right)
         
         self.end_node()
         
@@ -397,7 +405,7 @@ class Parser:
         while self.match(TokenType.EQUAL_EQUAL) or self.match(TokenType.BANG_EQUAL):
             op = self.previous()
             right = self.comparison()
-            expr = BinaryExpr(self.get_span(), expr, op, right)
+            expr = BinaryExpr(self.get_span(False), expr, op, right)
 
         self.end_node()
         
@@ -411,7 +419,7 @@ class Parser:
               self.match(TokenType.LEFT_ANGLE) or self.match(TokenType.LESS_EQUAL):
             op = self.previous()
             right = self.term()
-            expr = BinaryExpr(self.get_span(), expr, op, right)
+            expr = BinaryExpr(self.get_span(False), expr, op, right)
 
         self.end_node()
         
@@ -424,7 +432,7 @@ class Parser:
         while self.match(TokenType.PLUS) or self.match(TokenType.MINUS):
             op = self.previous()
             right = self.factor()
-            expr = BinaryExpr(self.get_span(), expr, op, right)
+            expr = BinaryExpr(self.get_span(False), expr, op, right)
 
         self.end_node()
         
@@ -437,7 +445,7 @@ class Parser:
         while self.match(TokenType.STAR) or self.match(TokenType.SLASH):
             op = self.previous()
             right = self.unary()
-            expr = BinaryExpr(self.get_span(), expr, op, right)
+            expr = BinaryExpr(self.get_span(False), expr, op, right)
 
         self.end_node()
         
@@ -562,5 +570,5 @@ class Parser:
 
     @staticmethod
     def error(token: Token, msg: str) -> ParseException:
-        print(f"[Parser] [at [i]{token.pos}[/i]] [token [bold i]{token.raw}[/bold i]] [bold red][ERROR] {msg}[/bold red]")
+        print(f"[Parser] [at [white italic not bold underline]{token.pos}[/]] [token [bold i white]'{token.raw}'[/]] [bold red][ERROR] {msg}[/]")
         return ParseException()

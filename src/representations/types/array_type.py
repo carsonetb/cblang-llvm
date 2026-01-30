@@ -189,6 +189,14 @@ class ArrayType(Type):
         """
 
         return self.array_struct_type
+
+    @property 
+    def probable_type(self) -> ir.Type:
+        """
+        Returns ``llvm_type.as_pointer()``.
+        """
+
+        return self.array_struct_type.as_pointer()
     
     @property
     def name(self) -> str:

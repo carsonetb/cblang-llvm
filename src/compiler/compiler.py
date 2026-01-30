@@ -359,7 +359,9 @@ class Compiler:
             if field.value != ret_val and isinstance(field.value, RCValue):
                 field.value.release(self.builder, self.rc_runtime)
         
-        if isinstance(ret_val, Value):
+        if isinstance(ret_val, RCValue):
+            self.builder.ret(ret_val.value_ptr)
+        elif isinstance(ret_val, Value):
             self.builder.ret(ret_val.load_value(self.builder))
         else:
             self.builder.ret_void()
@@ -416,7 +418,9 @@ class Compiler:
             raise compile_error(generate.type_name[0], f"Cannot assign '{expr_value.val_type.name}' to '{var_type.name}'")
     
         if var_type.needs_refcount:
-            hl_value = RCValue(self.builder, var_type, expr_value.value_ptr, self.rc_runtime, self.target_data, var_name.raw)
+            # Do not allocate because we are just moving the pointer from here to there.
+            # Theoretically reference count doesn't increase because it goes from the expression scope to the variable itself.
+            hl_value = RCValue(self.builder, var_type, expr_value.value_ptr, self.rc_runtime, self.target_data, var_name.raw, allocate=False) 
         else:
             hl_value = expr_value
         field = ValueField(var_type, hl_value, generate.flags)
@@ -485,7 +489,7 @@ class Compiler:
         args: list[ir.Type] = []
         for arg in type_list:
             args.append(arg.llvm_type.as_pointer() if arg.needs_refcount else arg.llvm_type)
-        ir_function_ty = ir.FunctionType(return_type.llvm_type, args)
+        ir_function_ty = ir.FunctionType(return_type.probable_type, args)
         function_value = ir.Function(self.module, ir_function_ty, f"{self.path}__{generate.name.raw}")
         
         function_type = FunctionType(self.module, generate.name.raw, type_list, return_type, function_value)
@@ -523,7 +527,12 @@ class Compiler:
         # Add arguments to scope.
         if not inside or len(function_value.args) > 1:
             for i, arg in enumerate(function_value.args if not inside else function_value.args[1:]):
-                self.scope[arg_types[i][0]] = ValueField(arg_types[i][1], Value(self.builder, arg_types[i][1], arg, f"arg_{arg.name}"))
+                arg_name, arg_type = arg_types[i]
+                if arg_types[i][1].needs_refcount:
+                    value = RCValue(self.builder, arg_type, arg, self.rc_runtime, self.target_data, f"arg_{arg.name}", allocate=False)
+                else:
+                    value = Value(self.builder, arg_type, arg, f"arg_{arg.name}")
+                self.scope[arg_name] = ValueField(arg_type, value)
 
         for stmt in generate.body:
             possible_ret = self.gen_statement(stmt)
@@ -545,6 +554,7 @@ class Compiler:
     
     def gen_class(self, generate: Class) -> UserType:
         out = UserType(self.module, generate.name.raw, self.rc_runtime)
+        self.type_db[out.name] = out
 
         # This class' scope.
         self.scoped_variables.append({})
@@ -556,6 +566,7 @@ class Compiler:
         initializer_value = ir.Function(self.module, initializer_ir_type, f"{self.path}__init")
         initializer_type = FunctionType(self.module, generate.name.raw, type_list, out, initializer_value)
         initializer_field = ValueField(initializer_type, FunctionValue(self.builder, initializer_type, initializer_value), {MemberFlag.STATIC})
+        add_field(self.data, generate.name, initializer_field, 2)
 
         block = initializer_value.append_basic_block("entry")
         self.builder_stack.append(ir.IRBuilder(block))
@@ -566,12 +577,6 @@ class Compiler:
 
         member_index = 0
         for index, arg in enumerate(initializer_value.args):
-            zero = ir.Constant(I32, 0)
-            idx = ir.Constant(I32, index)
-
-            field_pointer = self.builder.gep(this_ptr, [zero, idx], name=f"ptr_field_{idx}")
-            self.builder.store(arg, field_pointer)
-
             type_name = generate.args[index]
             arg_type = get_type(self.data, type_name[0])
             add_field(self.data, type_name[1], ValueField(arg_type, Value(self.builder, arg_type, arg, f"member_{arg.name}")))
@@ -594,6 +599,13 @@ class Compiler:
         if len(class_scope.items()) == 0:
             out.add_field("dummy_value", Field(BoolType(self.module), {}))
         out.finalize()
+
+        for index, arg in enumerate(initializer_value.args):
+            zero = ir.Constant(I32, 0)
+            idx = ir.Constant(I32, index)
+
+            field_pointer = self.builder.gep(this_ptr, [zero, idx], name=f"ptr_field_{idx}")
+            self.builder.store(arg, field_pointer)
 
         init_field = out.get_field("init") if out.has_field("init") else None
         if init_field and isinstance(init_field, ValueField) and isinstance(init_field.value, FunctionValue):
@@ -620,9 +632,6 @@ class Compiler:
             func = class_scope[member.name.raw]
             assert isinstance(func.value, FunctionValue)
             self.gen_function_definition(member, func.value.function, out)
-
-        self.type_db[out.name] = out
-        add_field(self.data, generate.name, initializer_field)
 
         return out
     

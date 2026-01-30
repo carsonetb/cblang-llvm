@@ -12,15 +12,15 @@ from rich import print
 
 
 def compile_error(token: Token | Span, msg: str) -> RuntimeError:
-    line_repr = f"[at [i]{token.pos}[i]]" if token is Token else f"[from [i]{token}[/i]]"
-    raw = f" [token [bold][i]{token.raw}[/i][/bold]]" if token is Token else ""
+    line_repr = f"[at [i]{token.pos}[/]]" if isinstance(token, Token) else f"[from [i]{token}[/]]"
+    raw = f" [token [bold i]'{token.raw}'[/]]" if isinstance(token, Token) else ""
     print(f"[Compiler] {line_repr}{raw} [bold red][ERROR] {msg}[/bold red]")
     return RuntimeError()
 
 
 def compile_warning(token: Token | Span, msg: str) -> RuntimeError:
-    line_repr = f"[at [i]{token.pos}[i]]" if token is Token else f"[from [i]{token}[/i]]"
-    raw = f" [token [bold][i]{token.raw}[/i][/bold]]" if token is Token else ""
+    line_repr = f"[at [i]{token.pos}[/]]" if isinstance(token, Token) else f"[from [i]{token}[/]]"
+    raw = f" [token [bold i]'{token.raw}'[/]]" if isinstance(token, Token) else ""
     print(f"[Compiler] {line_repr}{raw} [i yellow][WARNING] {msg}[/i yellow]")
     return RuntimeError()
 
@@ -38,8 +38,8 @@ def get_type(data: CompilerData, name: Token) -> Type:
     return data.type_db[name.raw]
 
     
-def add_field(data: CompilerData, name: Token, val: ValueField) -> None:
-    scope = data.scoped_variables[-1]
+def add_field(data: CompilerData, name: Token, val: ValueField, back_stack: int = 1) -> None:
+    scope = data.scoped_variables[-back_stack]
     if name.raw in scope:
         raise compile_error(name, f"Field '{name}' already exists within the current scope.")
     

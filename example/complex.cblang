@@ -1,0 +1,12 @@
+class Complex (float real, float imag) = (
+    operator scope + (Complex other) -> Complex = {
+        return Complex(real + other.real, imag + other.imag);
+    }
+)
+
+scope main = {
+    Complex a = Complex(5.0, 0.0);
+    Complex b = Complex(6.0, 0.0);
+    Complex c = a + b;
+    print(c.real);
+}

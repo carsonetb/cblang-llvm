@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from representations.types.array_type import ArrayType
     from representations.types.void_type import VoidType
     from runtime.rc_runtime import RCRuntime
+    from representations.types.string_type import StringType
 
 class Value:
     """Base value for CBLang. Contains a Type and LLVM Value.
@@ -99,7 +100,15 @@ class FunctionValue(Value):
         self.is_this_member = False
     
     def call_this(self, builder: ir.IRBuilder, args: list[Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
-        return self.call_this_basic(builder, [arg.load_value(builder) for arg in args], rc_runtime, target_data)
+        from representations.types.string_type import StringType
+        
+        loaded_args = []
+        for arg in args:
+            if arg.val_type.needs_refcount and not isinstance(arg.val_type, StringType): # TODO: This is really hacky
+                loaded_args.append(arg.value_ptr)
+            else:
+                loaded_args.append(arg.load_value(builder))
+        return self.call_this_basic(builder, loaded_args, rc_runtime, target_data)
     
     def call_this_basic(self, builder: ir.IRBuilder, args: Sequence[ir.Value], rc_runtime: RCRuntime, target_data: llvm.TargetData) -> Value | VoidValue:
         # Lazy import to avoid circular dependency

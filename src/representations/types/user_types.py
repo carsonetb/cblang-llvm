@@ -56,6 +56,15 @@ class UserType(Type):
         """
 
         return self._llvm_type
+    
+    @property 
+    def probable_type(self) -> ir.Type:
+        """
+        Because this is reference counted, every type is a pointer, so it's going to
+        be most useful to have the raw type as a pointer.
+        """
+
+        return self.llvm_type.as_pointer()
 
     @property
     def name(self) -> str:
@@ -192,7 +201,7 @@ class FunctionType(Type):
     def __init__(self, module: ir.Module, name: str, args: list[Type], returns: Type, function: ir.Function) -> None:
         super().__init__(module)
         self._name = name
-        self._llvm_type = ir.FunctionType(returns.llvm_type, ((arg.llvm_type.as_pointer() if arg.needs_refcount else arg.llvm_type) for arg in args)).as_pointer()
+        self._llvm_type = ir.FunctionType(returns.probable_type, (arg.probable_type for arg in args)).as_pointer()
         self.returns = returns
         self.args = args
         self.function = function

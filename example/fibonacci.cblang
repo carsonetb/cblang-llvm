@@ -1,3 +1,7 @@
+class Test (int input) = (
+    int x = 0
+)
+
 scope fibonacci(int n) -> int = {
     if (n == 0) {
         return 0;
@@ -22,7 +26,3 @@ scope fibonacci(int n) -> int = {
 scope main = {
     fibonacci(110000);
 }
-
-class Main = (
-    
-)

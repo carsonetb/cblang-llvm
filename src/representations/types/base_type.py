@@ -30,6 +30,15 @@ class Type(ABC):
         """
         pass
 
+    @property 
+    def probable_type(self) -> ir.Type:
+        """
+        Gets the type that will probably be most useful. Defaults
+        to the LLVM type but might return a pointer if the type is
+        reference counted.
+        """
+        return self.llvm_type
+
     @property
     @abstractmethod
     def name(self) -> str: 

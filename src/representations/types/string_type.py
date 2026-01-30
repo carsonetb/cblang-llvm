@@ -46,6 +46,14 @@ class StringType(Type):
 
         return I8_POINTER
     
+    @property 
+    def probable_type(self) -> ir.Type:
+        """
+        Pointer to the "struct" that contains the pointer to the ``malloc``'d array.
+        """
+
+        return I8_POINTER.as_pointer()
+    
     @property
     def name(self) -> str:
         return "string"
