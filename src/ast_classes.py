@@ -15,6 +15,12 @@ class Span:
         return f"{self.start}-{self.end}"
 
 
+@dataclass 
+class Templated:
+    base_type: Token 
+    templates: list[Templated]
+
+
 @dataclass
 class Statement(ABC):
     spans: Span
@@ -64,6 +70,7 @@ class VariableExpr(Accessible):
 @dataclass
 class CallExpr(Accessible):
     callee: Token
+    templates: list[Templated]
     args: list[Expression]
 
 
@@ -108,7 +115,8 @@ class Import(Statement):
 
 @dataclass
 class VarDecl(Statement):
-    type_name: tuple[Token, Token]
+    var_type: Templated 
+    name: Token
     value: Expression
     flags: set[MemberFlag]
 
@@ -152,7 +160,8 @@ class ForStmt(Statement):
 @dataclass
 class Function(Statement):
     name: Token
-    args: list[tuple[Token, Token]]
+    templates: list[Token]
+    args: list[tuple[Templated, Token]]
     returns: Token | None
     body: list[Statement]
     member_flags: set[MemberFlag]
@@ -162,7 +171,8 @@ class Function(Statement):
 @dataclass
 class Class(Statement):
     name: Token
-    args: list[tuple[Token, Token]]
+    templates: list[Token]
+    args: list[tuple[Templated, Token]]
     members: list[Class | Function | VarDecl]
 
 

@@ -3,7 +3,7 @@ from ast_classes import (
     ArrayExpr, AssignmentStmt, BinaryExpr, CallExpr, Class, ElseStmt,
     Expression, ForStmt, Function, FunctionFlag, Grouping, IfStmt, Import, LambdaExpr,
     LiteralExpr, LiteralType, MemberFlag, Program, ReturnStmt, ScopeStmt, Span,
-    Statement, UnaryExpr, VarDecl, VariableExpr, WhileStmt
+    Statement, Templated, UnaryExpr, VarDecl, VariableExpr, WhileStmt
 )
 from scanner import CodePosition, Token, TokenType
 from rich import print
@@ -140,14 +140,14 @@ class Parser:
     def var_decl(self) -> VarDecl:
         self.begin_node(True)
         flags = self.member_flags()
-        type_token = self.consume(TokenType.IDENTIFIER, "Expected type name")
+        type_token, templates = self.templated_type()
         name_token = self.consume(TokenType.IDENTIFIER, "Expected variable name")
         
         self.consume(TokenType.EQUAL, "Expected '=' after variable declaration.")
         value = self.expression()
         
         self.consume_semicolon()
-        return VarDecl(self.get_span(), (type_token, name_token), value, flags)
+        return VarDecl(self.get_span(), Templated(type_token, templates), name_token, value, flags)
     
     def if_stmt(self, use_elif_kw: bool = False) -> IfStmt:
         self.begin_node(True)
@@ -231,9 +231,10 @@ class Parser:
             name = self.consume(TokenType.IDENTIFIER, "Expected function name")
         else:
             name = self.consume(self.peek().ttype, "")
+        templates = self.template_definition()
         
         # Optional parameters
-        args: list[tuple[Token, Token]] = []
+        args: list[tuple[Templated, Token]] = []
         if self.match(TokenType.LEFT_PAREN):
             if not self.check(TokenType.RIGHT_PAREN):
                 args = self.parameters()
@@ -249,19 +250,20 @@ class Parser:
         body = self.scope_body()
         self.consume(TokenType.RIGHT_CURLY, "Expected '}' to end function body")
         
-        return Function(self.get_span(), name, args, returns, body, member_flags, func_flags)
+        return Function(self.get_span(), name, templates, args, returns, body, member_flags, func_flags)
     
     def class_decl(self) -> Class:
         self.begin_node(True)
         self.consume(TokenType.CLASS_KW, "Expected 'class' keyword")
         name = self.consume(TokenType.IDENTIFIER, "Expected class name")
+        templates = self.template_definition()
         
         if self.match(TokenType.COLON):
             self.consume(TokenType.IDENTIFIER, "Expected parent class name")
             while self.match(TokenType.COMMA):
                 self.consume(TokenType.IDENTIFIER, "Expected parent class name")
         
-        args: list[tuple[Token, Token]] = []
+        args: list[tuple[Templated, Token]] = []
         if self.match(TokenType.LEFT_PAREN):
             if not self.check(TokenType.RIGHT_PAREN):
                 args = self.parameters()
@@ -278,7 +280,7 @@ class Parser:
         
         self.consume(TokenType.RIGHT_PAREN, "Expected ')' to end class body")
         
-        return Class(self.get_span(), name, args, members)
+        return Class(self.get_span(), name, templates, args, members)
     
     def member_decl(self) -> Class | Function | VarDecl:
         if self.check(TokenType.CLASS_KW):
@@ -300,21 +302,21 @@ class Parser:
     def member_var_decl(self) -> VarDecl:
         self.begin_node(True)
         flags = self.member_flags()
-        type_token = self.consume(TokenType.IDENTIFIER, "Expected type name")
+        type_token, templates = self.templated_type()
         name_token = self.consume(TokenType.IDENTIFIER, "Expected variable name")
         
         self.consume(TokenType.EQUAL, "Expected '=' after member variable declaration.")
         value = self.expression()
         
-        return VarDecl(self.get_span(), (type_token, name_token), value, flags)
+        return VarDecl(self.get_span(), Templated(type_token, templates), name_token, value, flags)
     
-    def parameters(self) -> list[tuple[Token, Token]]:
-        params: list[tuple[Token, Token]] = []
+    def parameters(self) -> list[tuple[Templated, Token]]:
+        params: list[tuple[Templated, Token]] = []
         
         while True:
-            type_token = self.consume(TokenType.IDENTIFIER, "Expected parameter type")
+            arg_type, arg_templates = self.templated_type()
             name_token = self.consume(TokenType.IDENTIFIER, "Expected parameter name")
-            params.append((type_token, name_token))
+            params.append((Templated(arg_type, arg_templates), name_token))
 
             if not self.match(TokenType.COMMA):
                 break
@@ -514,6 +516,8 @@ class Parser:
     def function_or_variable(self) -> VariableExpr | CallExpr:
         self.begin_node(True)
         name = self.consume(TokenType.IDENTIFIER, "Expected identifier")
+
+        # TODO: Templates in here.
         
         if self.match(TokenType.LEFT_PAREN):
             args: list[Expression] = []
@@ -534,6 +538,36 @@ class Parser:
         while self.match(TokenType.COMMA):
             exprs.append(self.expression())
         return exprs
+    
+    def template_definition(self) -> list[Token]:
+        if not self.match(TokenType.LEFT_ANGLE):
+            return []
+
+        out = [] 
+
+        while True:
+            out.append(self.consume(TokenType.IDENTIFIER, "Expected identifier."))
+            if self.match(TokenType.RIGHT_ANGLE):
+                break
+            self.consume(TokenType.COMMA, "Expected ',' or '>' after template argument.")
+
+        return out
+    
+    def templated_type(self) -> tuple[Token, list[Templated]]:
+        name = self.consume(TokenType.IDENTIFIER, "Expected identifier.")
+        
+        if not self.match(TokenType.LEFT_ANGLE):
+            return (name, [])
+        
+        inners: list[Templated] = []
+        while True:
+            inner_type, inner_templates = self.templated_type()
+            inners.append(Templated(inner_type, inner_templates))
+            if self.match(TokenType.RIGHT_ANGLE):
+                break 
+            self.consume(TokenType.COMMA, "Expected ',' or '>' after template argument.")
+        
+        return (name, inners)
     
     # ========== HELPERS ==========
     

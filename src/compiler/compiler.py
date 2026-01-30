@@ -629,7 +629,11 @@ class Compiler:
         for member in generate.members:
             if isinstance(member, (Class, VarDecl)):
                 continue
-            func = class_scope[member.name.raw]
+            name = member.name.raw
+            if FunctionFlag.CAST in member.function_flags:
+                assert member.returns is not None
+                name = member.returns.raw
+            func = class_scope[name]
             assert isinstance(func.value, FunctionValue)
             self.gen_function_definition(member, func.value.function, out)
 

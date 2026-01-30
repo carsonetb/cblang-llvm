@@ -1,6 +1,14 @@
 class Complex (float real, float imag) = (
     operator scope + (Complex other) -> Complex = {
         return Complex(real + other.real, imag + other.imag);
+    },
+
+    operator scope - (Complex other) -> Complex = {
+        return Complex(real - other.real, imag - other.imag);
+    },
+
+    operator scope * (Complex other) -> Complex = {
+        return Complex(real - other.real, imag - other.imag);
     }
 )
 
